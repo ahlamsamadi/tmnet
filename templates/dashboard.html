@@ -31,7 +31,6 @@
       <div class="nav-item active" data-view="dashboard"><svg><use href="#icon-dashboard"/></svg><span data-i18n="nav_dashboard">داشبورد</span></div>
       <div class="nav-item" data-view="inbounds"><svg><use href="#icon-users"/></svg><span data-i18n="nav_inbounds">کاربران</span><span class="badge" id="navInboundCount">0</span></div>
       <div class="nav-item" data-view="traffic"><svg><use href="#icon-traffic"/></svg><span data-i18n="nav_traffic">ترافیک</span></div>
-      <!-- آیتم Clean IP حذف شد -->
       <div class="nav-item" data-view="security"><svg><use href="#icon-shield"/></svg><span data-i18n="nav_security">امنیت</span></div>
       <div class="nav-item" data-view="settings"><svg><use href="#icon-settings"/></svg><span data-i18n="nav_settings">تنظیمات</span></div>
     </nav>
@@ -371,7 +370,7 @@
   </div>
 </div>
 
-<!-- ============ MODAL: Links / QR (اصلاح‌شده) ============ -->
+<!-- ============ MODAL: Links / QR (نسخه ۱.۴.۱) ============ -->
 <div class="modal-overlay" id="linksModal">
   <div class="modal">
     <div class="modal-head">
@@ -382,25 +381,49 @@
       <div class="text-center">
         <div class="qr-box" id="qrBox"><img id="qrImg" width="180" height="180" alt="QR"></div>
       </div>
+      
+      <!-- لینک TLS -->
       <div>
         <label class="small muted mb-8" style="display:block;" data-i18n="inb_link_tls">کانفیگ TLS (پورت ۴۴۳)</label>
         <div class="link-row"><code id="linkTls"></code><button class="icon-btn btn-sm" data-copy="linkTls"><svg width="15" height="15"><use href="#icon-link"/></svg></button></div>
       </div>
-      <!-- بخش بدون TLS حذف شد -->
+      
+      <!-- لینک اشتراک -->
       <div>
-        <label class="small muted mb-8" style="display:block;" data-i18n="inb_sub_link">لینک اشتراک</label>
+        <label class="small muted mb-8" style="display:block;" data-i18n="inb_sub_link">لینک اشتراک (سازگار با v2rayNG)</label>
         <div class="link-row"><code id="linkSub"></code><button class="icon-btn btn-sm" data-copy="linkSub"><svg width="15" height="15"><use href="#icon-link"/></svg></button></div>
+        <div class="small muted mt-8" style="color:var(--gold-300);">
+          <svg width="14" height="14" style="vertical-align:-2px;"><use href="#icon-info"/></svg>
+          <span data-i18n="inb_sub_note">لینک اشتراک شامل دو کانفیگ نمایشی (وضعیت مصرف و پیام رایگان) به‌همراه کانفیگ TLS است.</span>
+        </div>
       </div>
+      
+      <!-- لینک وضعیت -->
       <div>
         <label class="small muted mb-8" style="display:block;" data-i18n="inb_status_link">لینک وضعیت (برای کاربر)</label>
         <div class="link-row"><code id="linkStatus"></code><button class="icon-btn btn-sm" data-copy="linkStatus"><svg width="15" height="15"><use href="#icon-link"/></svg></button></div>
       </div>
-      <!-- بخش آی‌پی تمیز و note مربوط به info_configs حذف شد -->
+      
+      <!-- لینک JSON -->
+      <div>
+        <label class="small muted mb-8" style="display:block;" data-i18n="inb_sub_link_json">لینک اشتراک JSON</label>
+        <div class="link-row"><code id="linkSubJson"></code><button class="icon-btn btn-sm" data-copy="linkSubJson"><svg width="15" height="15"><use href="#icon-link"/></svg></button></div>
+      </div>
+
+      <!-- توضیحات نهایی -->
+      <div class="small muted" style="border-top:1px solid var(--border-soft); padding-top:14px;">
+        <span data-i18n="inb_info_configs_note">
+          لینک اشتراک به‌صورت متن ساده (Plain Text) ارائه می‌شود و شامل موارد زیر است:
+          <br>📊 یک کانفیگ نمایشی برای نمایش وضعیت مصرف و اعتبار
+          <br>❤️ یک کانفیگ نمایشی با پیام «StanNG is Free ❤️»
+          <br>🔗 یک کانفیگ TLS واقعی برای اتصال
+        </span>
+      </div>
     </div>
   </div>
 </div>
 
-<!-- ============ MODAL افزودن آدرس حذف شد ============ -->
+<!-- مودال Clean IP حذف شد -->
 
 <script src="/static/js/i18n.js"></script>
 <script src="/static/js/common.js"></script>
