@@ -1,5 +1,7 @@
 /* ===========================================================
-   StanNG — bilingual dictionary (fa / en) v1.4.0
+   StanNG — bilingual dictionary (fa / en) v1.4.1
+   Removed: Clean IP, Non‑TLS
+   Added: Info Configs descriptions, JSON subscription link
    =========================================================== */
 window.I18N = {
   // ---- brand / generic ----
@@ -48,11 +50,11 @@ window.I18N = {
   nav_dashboard: { fa: 'داشبورد', en: 'Dashboard' },
   nav_inbounds: { fa: 'کاربران / اینباندها', en: 'Inbounds' },
   nav_traffic: { fa: 'ترافیک', en: 'Traffic' },
-  // حذف کلید nav_cleanip
-  // nav_cleanip: { fa: 'آی‌پی تمیز', en: 'Clean IP' },
+  // حذف nav_cleanip
   nav_security: { fa: 'امنیت', en: 'Security' },
   nav_settings: { fa: 'تنظیمات', en: 'Settings' },
   nav_logout: { fa: 'خروج', en: 'Logout' },
+  nav_support: { fa: 'پشتیبانی تلگرام', en: 'Telegram Support' },
 
   // ---- dashboard ----
   dash_welcome: { fa: 'به قلمرو StanNG خوش آمدید', en: 'Welcome to the StanNG realm' },
@@ -103,14 +105,19 @@ window.I18N = {
   inb_regenerated: { fa: 'لینک جدید صادر شد', en: 'New link issued' },
   inb_links: { fa: 'لینک‌ها', en: 'Links' },
   inb_qr: { fa: 'کد QR', en: 'QR Code' },
-  inb_sub_link: { fa: 'لینک اشتراک', en: 'Subscription Link' },
+  inb_sub_link: { fa: 'لینک اشتراک (سازگار با v2rayNG)', en: 'Subscription Link (v2rayNG compatible)' },
   inb_sub_link_json: { fa: 'لینک اشتراک JSON', en: 'JSON Subscription Link' },
   inb_status_link: { fa: 'لینک وضعیت (برای کاربر)', en: 'Status Link (for user)' },
   inb_link_tls: { fa: 'کانفیگ TLS (پورت ۴۴۳)', en: 'TLS Config (port 443)' },
-  // حذف کلیدهای مربوط به Non‑TLS و Clean IP و Info Configs
-  // inb_link_nontls: { fa: 'کانفیگ بدون TLS (پورت ۸۰)', en: 'Non-TLS Config (port 80)' },
-  // inb_link_addresses: { fa: 'کانفیگ‌های آی‌پی تمیز', en: 'Clean-IP Configs' },
-  // inb_info_configs_note: { fa: 'در لینک اشتراک، به‌صورت خودکار دو کانفیگ نمایشی هم اضافه می‌شود: یکی وضعیت زنده حجم/اعتبار و دیگری پیام «StanNG رایگان است ❤️».', en: 'The subscription link automatically bundles two display-only entries: a live quota/expiry readout and a "StanNG is Free ❤️" credit line.' },
+  // حذف inb_link_nontls, inb_link_addresses
+  inb_sub_note: {
+    fa: 'لینک اشتراک شامل دو کانفیگ نمایشی (وضعیت مصرف و پیام رایگان) به‌همراه کانفیگ TLS است.',
+    en: 'The subscription link includes two display-only configs (usage status and free message) plus the TLS config.'
+  },
+  inb_info_configs_note: {
+    fa: 'لینک اشتراک به‌صورت متن ساده (Plain Text) ارائه می‌شود و شامل موارد زیر است:\n📊 یک کانفیگ نمایشی برای نمایش وضعیت مصرف و اعتبار\n❤️ یک کانفیگ نمایشی با پیام «StanNG is Free ❤️»\n🔗 یک کانفیگ TLS واقعی برای اتصال',
+    en: 'The subscription link is provided as plain text and includes:\n📊 A display-only config showing usage and expiry status\n❤️ A display-only config with "StanNG is Free ❤️" message\n🔗 A real TLS config for connection'
+  },
   inb_empty: { fa: 'هنوز کاربری اضافه نشده است', en: 'No users added yet' },
   inb_active_devices: { fa: 'دستگاه فعال', en: 'active devices' },
   inb_used_of: { fa: 'از', en: 'of' },
@@ -128,9 +135,7 @@ window.I18N = {
   traffic_per_user: { fa: 'ترافیک به تفکیک کاربر', en: 'Traffic per user' },
 
   // ---- حذف کامل بخش Clean IP ----
-  // cleanip_title: { ... },
-  // cleanip_add: { ... },
-  // ...
+  // کلیدهای cleanip_* حذف شدند
 
   // ---- security ----
   sec_title: { fa: 'امنیت حساب', en: 'Account Security' },
@@ -163,7 +168,6 @@ window.I18N = {
   settings_fragment_packets: { fa: 'Packets', en: 'Packets' },
   settings_fragment_length: { fa: 'Length', en: 'Length' },
   settings_fragment_interval: { fa: 'Interval', en: 'Interval' },
-  nav_support: { fa: 'پشتیبانی تلگرام', en: 'Telegram Support' },
 
   // ---- status page (public) ----
   status_page_title: { fa: 'وضعیت اشتراک', en: 'Subscription Status' },
