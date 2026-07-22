@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
 """
 StanNG — a single-service VLESS-over-WebSocket panel, wizarding-academy themed.
-
-Design goals (per project scope):
-  - ONE service, ONE process, ZERO external database.
-  - Persistent state lives in a local JSON file (data/db.json).
-  - First-time visitors are guided through a tiny setup wizard to create
-    an admin username & password; every later visit just logs in with it.
-  - Bilingual UI (Persian / English) fully client-rendered, RTL aware.
+Version 1.4.1 — plain-text subscription with Info Configs + TLS, compatible with v2rayNG.
 """
 import asyncio
 import base64
@@ -39,19 +33,18 @@ from colo_map import describe_colo
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 APP_VERSION = "1.4.1"
-PANEL_NAME = "StanNG"  # fixed brand name — intentionally not user-editable
+PANEL_NAME = "StanNG"
 TELEGRAM_CONTACT = "https://t.me/rvivl"
 SESSION_COOKIE = "stanng_session"
-SESSION_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
+SESSION_MAX_AGE = 60 * 60 * 24 * 7
 LOGIN_MAX_ATTEMPTS = 6
 LOGIN_LOCK_SECONDS = 5 * 60
 
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
-# ------------------------------------------------------------------ runtime
 runtime = {
-    "active": {},           # uid -> {conn_id: {"ip": str, "since": float}}
-    "pending_traffic": {},  # uid -> {"up": int, "down": int}
+    "active": {},
+    "pending_traffic": {},
     "lock": asyncio.Lock(),
 }
 
@@ -71,7 +64,6 @@ app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), na
 
 
 # ------------------------------------------------------------------ helpers
-
 def get_serializer(db) -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(db["secret_key"], salt="stanng-session")
 
@@ -99,7 +91,7 @@ async def current_username(request: Request) -> Optional[str]:
     if data.get("u") != admin.get("username"):
         return None
     if data.get("v") != admin.get("password_hash", "")[:12]:
-        return None  # invalidated by password change
+        return None
     return admin["username"]
 
 
@@ -134,9 +126,7 @@ def public_host(request: Request, db) -> str:
     if override:
         return override.strip().split(":")[0]
     host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.hostname or ""
-    # strip any port suffix (VLESS host/sni fields must be a bare hostname)
     if host.startswith("["):
-        # IPv6 literal like [::1]:8080
         return host.split("]")[0].lstrip("[")
     return host.split(":")[0]
 
@@ -173,7 +163,6 @@ def inbound_status(ib) -> dict:
 
 
 # ------------------------------------------------------------------ background tasks
-
 async def _periodic_flush():
     while True:
         try:
@@ -218,14 +207,10 @@ async def _housekeeping_loop():
     while True:
         try:
             await asyncio.sleep(30)
-            now = time.time()
-
             def _check(db):
                 for ib in db["inbounds"]:
                     st = inbound_status(ib)
                     if not st["live_enabled"] and ib.get("enabled", True):
-                        # do not force-flip the stored 'enabled'; live_enabled already reflects
-                        # quota/expiry/requests. We keep 'enabled' as the admin's manual toggle.
                         pass
             await store.mutate(_check)
         except asyncio.CancelledError:
@@ -253,7 +238,6 @@ async def _keep_alive_loop():
 
 
 # ------------------------------------------------------------------ page routes
-
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     db = await store.get()
@@ -311,7 +295,6 @@ async def status_page(request: Request, uid: str):
 
 
 # ------------------------------------------------------------------ auth api
-
 @app.get("/api/setup-status")
 async def setup_status():
     db = await store.get()
@@ -435,8 +418,6 @@ async def api_change_password(request: Request, user: str = Depends(require_auth
 @app.post("/api/settings")
 async def api_update_settings(request: Request, user: str = Depends(require_auth)):
     payload = await request.json()
-    # NOTE: panel_name is intentionally NOT editable here — it's a fixed brand
-    # constant (PANEL_NAME) so a user can never rename the panel their admin built.
     allowed = {
         "lang", "theme", "public_domain", "keep_alive", "ota_repo",
         "default_fingerprint", "default_alpn", "sni_override",
@@ -461,14 +442,11 @@ async def api_update_settings(request: Request, user: str = Depends(require_auth
 
 
 # ------------------------------------------------------------------ inbounds api
-
 def serialize_inbound(ib) -> dict:
     st = inbound_status(ib)
     out = dict(ib)
     out["active_ips"] = None
-    out.update({
-        "status": st,
-    })
+    out.update({"status": st})
     return out
 
 
@@ -584,7 +562,8 @@ async def api_regenerate_uuid(uid: str, user: str = Depends(require_auth)):
 
 
 def build_links(request: Request, db, ib) -> dict:
-    """Build VLESS links including TLS, Non-TLS, and info configs.
+    """
+    Build VLESS links: Info Configs (display-only) + TLS config.
     IMPORTANT: path and alpn use safe characters ('/' and ',') so v2rayNG can parse them correctly.
     """
     host = public_host(request, db)
@@ -603,15 +582,7 @@ def build_links(request: Request, db, ib) -> dict:
                 f"&sni={quote(sni)}&fp={fp}&alpn={quote(alpn, safe=',/')}"
                 f"#{quote(remark_tls)}")
 
-    # ---- Non-TLS config (port 80) ----
-    remark_nontls = f"StanNG-{name}-NoTLS"
-    link_nontls = (f"vless://{uuidv}@{host}:80?encryption=none&security=none"
-                   f"&type=ws&host={quote(host)}&path={quote(path, safe='/')}"
-                   f"&sni={quote(sni)}&fp={fp}&alpn={quote(alpn, safe=',/')}"
-                   f"#{quote(remark_nontls)}")
-
     # ---- Info configs (display-only placeholders) ----
-    # These are intentionally non-functional dummy links that only show info via their remark.
     st = inbound_status(ib)
     quota_gb = ib.get("quota_gb") or 0
     used_gb = st["used"] / (1024 ** 3)
@@ -629,9 +600,7 @@ def build_links(request: Request, db, ib) -> dict:
 
     return {
         "tls": link_tls,
-        "nontls": link_nontls,
         "info_configs": info_configs,
-        "addresses": [],  # kept for compatibility (clean-IP feature was removed)
     }
 
 
@@ -669,20 +638,26 @@ async def api_inbound_qr(uid: str, request: Request, user: str = Depends(require
 
 @app.get("/sub/{uid}")
 async def sub_plain(uid: str, request: Request):
+    """
+    Returns plain-text VLESS links (not Base64 encoded).
+    Includes Info Configs (display-only) + TLS config.
+    This format is compatible with v2rayNG and other clients.
+    """
     db = await store.get()
     ib = inbound_by_uid(db, uid)
     if not ib:
         raise HTTPException(404, "not-found")
     links = build_links(request, db, ib)
     
-    # Combine all links: info configs (display-only) + TLS + Non-TLS
+    # Combine links: Info Configs (display-only) + TLS
     all_links = (
         [c["link"] for c in links["info_configs"]]
-        + [links["tls"], links["nontls"]]
+        + [links["tls"]]
     )
     raw = "\n".join(all_links)
-    b64 = base64.b64encode(raw.encode()).decode()
-    return PlainTextResponse(b64, headers={"X-Powered-By": "StanNG"})
+    
+    # Return plain text (not Base64) so users can see the links directly
+    return PlainTextResponse(raw, headers={"X-Powered-By": "StanNG"})
 
 
 @app.get("/sub/{uid}/json")
@@ -704,7 +679,6 @@ async def sub_json(uid: str, request: Request):
         "active_connections": st["active_connections"],
         "links": {
             "tls": links["tls"],
-            "nontls": links["nontls"],
             "info_configs": links["info_configs"],
         },
     }, headers={"X-Powered-By": "StanNG"})
@@ -716,7 +690,6 @@ async def api_inbound_sub_alias(uid: str, request: Request, user: str = Depends(
 
 
 # ------------------------------------------------------------------ public status api
-
 @app.get("/api/status/{uid}")
 async def api_public_status(uid: str):
     db = await store.get()
@@ -741,7 +714,6 @@ async def api_public_status(uid: str):
 
 
 # ------------------------------------------------------------------ system / stats
-
 @app.get("/health")
 async def health():
     return {"status": "ok", "ts": time.time()}
@@ -788,8 +760,7 @@ def _ver_tuple(v):
 
 
 async def _resolve_latest_release(repo: str, current: str, client: httpx.AsyncClient):
-    """Returns (latest_version, html_url, download_zip_url) using GitHub's
-    releases API first, falling back to tags if the repo has no releases."""
+    """Returns (latest_version, html_url, download_zip_url) using GitHub's releases API."""
     latest, url, zip_url = current, f"https://github.com/{repo}/releases", None
     r = await client.get(f"https://api.github.com/repos/{repo}/releases/latest")
     if r.status_code == 200:
@@ -813,7 +784,7 @@ async def _resolve_latest_release(repo: str, current: str, client: httpx.AsyncCl
 async def api_ota_check(user: str = Depends(require_auth)):
     db = await store.get()
     repo = (db.get("settings") or {}).get("ota_repo") or "your-username/StanNG"
-    current = APP_VERSION  # always the version of the code actually running, never a stored value
+    current = APP_VERSION
     latest = current
     url = f"https://github.com/{repo}/releases"
     try:
@@ -827,28 +798,11 @@ async def api_ota_check(user: str = Depends(require_auth)):
 
 
 # ------------------------------------------------------------------ OTA self-update
-#
-# Design constraints (must never be violated):
-#   1. data/db.json (all users, admin credentials, traffic stats) is NEVER
-#      touched by an update — it lives outside the code tree that gets
-#      replaced, and the updater explicitly refuses to overwrite it even if
-#      a downloaded release happened to include a stray copy.
-#   2. The update is staged into a temp directory and verified before a
-#      single file in the live install is modified, so a bad/partial
-#      download can never leave the panel half-updated.
-#   3. After swapping files in, the process exits with a special code; the
-#      platform's restart policy (Railway/Render/systemd all do this) brings
-#      the app back up instantly on the new code. There is no in-process
-#      "hot swap" of Python source, which would be unreliable.
-
 UPDATE_LOCK = asyncio.Lock()
-NEVER_TOUCH = {"data"}  # top-level paths that must never be replaced/removed by an update
+NEVER_TOUCH = {"data"}
 
 
 def _safe_extract_zip(zip_path: str, dest_dir: str):
-    """Extract a GitHub codeload zip (which wraps everything in a single
-    top-level '<owner>-<repo>-<sha>/' folder) into dest_dir, stripping that
-    wrapper folder. Guards against zip-slip path traversal."""
     import zipfile
     with zipfile.ZipFile(zip_path) as zf:
         names = zf.namelist()
@@ -873,9 +827,6 @@ def _safe_extract_zip(zip_path: str, dest_dir: str):
 
 
 def _apply_staged_update(staged_dir: str, live_dir: str) -> list:
-    """Copies every file from staged_dir into live_dir, EXCEPT anything
-    under a path listed in NEVER_TOUCH. Returns the list of top-level
-    entries that were updated, for logging/telemetry."""
     import shutil
     touched = []
     for entry in os.listdir(staged_dir):
@@ -895,9 +846,6 @@ def _apply_staged_update(staged_dir: str, live_dir: str) -> list:
 
 @app.post("/api/ota/update")
 async def api_ota_update(request: Request, user: str = Depends(require_auth)):
-    """Downloads the latest tagged release/tag source archive, stages it,
-    and swaps it into place — never touching data/db.json — then schedules
-    a process exit so the host platform restarts us on the new code."""
     if UPDATE_LOCK.locked():
         raise HTTPException(409, "update-already-in-progress")
 
@@ -933,16 +881,10 @@ async def api_ota_update(request: Request, user: str = Depends(require_auth)):
 
             _safe_extract_zip(zip_path, staged_dir)
 
-            # Sanity check: refuse to apply an archive that doesn't even
-            # look like this project, so a misconfigured repo can't nuke
-            # the live install with unrelated files.
             if not os.path.exists(os.path.join(staged_dir, "main.py")):
                 _shutil.rmtree(tmp_root, ignore_errors=True)
                 raise HTTPException(502, "downloaded-archive-missing-main.py")
 
-            # Belt-and-suspenders: if the release archive somehow contains
-            # its own data/ folder, strip it out before applying — the
-            # live data/ directory (with db.json) must never be replaced.
             staged_data = os.path.join(staged_dir, "data")
             if os.path.isdir(staged_data):
                 _shutil.rmtree(staged_data, ignore_errors=True)
@@ -955,18 +897,9 @@ async def api_ota_update(request: Request, user: str = Depends(require_auth)):
         except Exception as e:
             raise HTTPException(502, f"update-failed: {e}")
 
-        # Schedule a process exit shortly after responding, so the client
-        # gets a success response before we go down. We deliberately exit
-        # with a NON-ZERO code: Railway's restart policy in railway.json is
-        # "ON_FAILURE", which — per Railway's own docs — only restarts a
-        # service that stops with a non-zero exit code; exiting 0 there
-        # would just leave the service stopped forever. Render (and plain
-        # systemd/Docker --restart=on-failure setups) restart on any crash
-        # regardless of code, so a non-zero exit is safe and correct on
-        # every supported platform.
         async def _delayed_restart():
             await asyncio.sleep(1.5)
-            os._exit(87)  # 87 = arbitrary non-zero "restarting for update" code
+            os._exit(87)
 
         asyncio.create_task(_delayed_restart())
         return {
@@ -979,7 +912,6 @@ async def api_ota_update(request: Request, user: str = Depends(require_auth)):
 
 
 # ------------------------------------------------------------------ VLESS websocket endpoint
-
 @app.websocket("/ws/{uid}")
 async def ws_endpoint(websocket: WebSocket, uid: str):
     db = await store.get()
