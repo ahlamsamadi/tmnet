@@ -1,5 +1,7 @@
 /* ===========================================================
-   StanNG — dashboard controller (v1.4.0)
+   StanNG — dashboard controller (v1.4.1)
+   Fully compatible with plain‑text subscription links
+   (Info Configs + TLS), no Non‑TLS, no Clean IP.
    =========================================================== */
 (() => {
   let currentInbounds = [];
@@ -30,7 +32,6 @@
   const views = document.querySelectorAll('.view');
   const navItems = document.querySelectorAll('.nav-item[data-view]');
   const viewTitle = document.getElementById('viewTitle');
-  // حذف کلید cleanip
   const titleKeys = { dashboard: 'nav_dashboard', inbounds: 'nav_inbounds', traffic: 'nav_traffic', security: 'nav_security', settings: 'nav_settings' };
 
   function showView(name) {
@@ -40,7 +41,6 @@
     viewTitle.textContent = STANNG.t(titleKeys[name]);
     if (name === 'inbounds') loadInbounds();
     if (name === 'traffic') loadInbounds();
-    // حذف فراخوانی loadAddresses
     closeSidebarMobile();
     STANNG.playSfx('open', 0.3);
   }
@@ -374,18 +374,33 @@
     }
   }
 
+  // ============ LINKS MODAL (v1.4.1) ============
   async function showLinksModal(uid) {
     try {
       const r = await STANNG.api(`/api/inbounds/${uid}/links`);
-      document.getElementById('linkTls').textContent = r.links.tls;
-      // حذف r.links.nontls و r.links.addresses
-      document.getElementById('linkSub').textContent = r.sub_url;
-      document.getElementById('linkStatus').textContent = r.status_url;
+      
+      // نمایش لینک TLS
+      document.getElementById('linkTls').textContent = r.links.tls || '';
+      
+      // لینک اشتراک (با پروتکل https)
+      document.getElementById('linkSub').textContent = r.sub_url || '';
+      
+      // لینک وضعیت
+      document.getElementById('linkStatus').textContent = r.status_url || '';
+      
+      // لینک JSON
+      document.getElementById('linkSubJson').textContent = r.sub_json_url || '';
+      
+      // QR Code
       document.getElementById('qrImg').src = `/api/inbounds/${uid}/qr?t=${Date.now()}`;
+      
       openModal('linksModal');
-    } catch (e) { STANNG.toast(e.detail || 'error', 'error'); }
+    } catch (e) { 
+      STANNG.toast(e.detail || 'error', 'error'); 
+    }
   }
 
+  // ---------------- copy functionality ----------------
   function copyText(text) {
     navigator.clipboard.writeText(text).then(() => {
       STANNG.toast(STANNG.t('copied'), 'success', 1600);
@@ -394,11 +409,16 @@
   }
 
   document.querySelectorAll('[data-copy]').forEach(btn => {
-    btn.addEventListener('click', () => copyText(document.getElementById(btn.dataset.copy).textContent));
+    btn.addEventListener('click', () => {
+      const targetId = btn.dataset.copy;
+      const el = document.getElementById(targetId);
+      if (el) copyText(el.textContent);
+    });
   });
 
-  // ---------------- حذف کامل بخش آی‌پی تمیز ----------------
-  // توابع loadAddresses, renderAddressesTable, و رویدادهای addAddressBtn, fetchCleanIpBtn, addressSaveBtn حذف شدند.
+  // ---------------- حذف کامل بخش Clean IP ----------------
+  // تمام توابع مربوط به Clean IP حذف شدند: 
+  // loadAddresses, renderAddressesTable, addAddressBtn, fetchCleanIpBtn, addressSaveBtn
 
   // ---------------- security ----------------
   document.getElementById('securityForm').addEventListener('submit', async (e) => {
@@ -476,6 +496,6 @@
     document.getElementById('fragmentFields').style.pointerEvents = e.target.checked ? 'auto' : 'none';
   });
 
-  // initial load
+  // ---------------- initial load ----------------
   loadInbounds();
 })();
