@@ -38,7 +38,7 @@ from vless_engine import relay
 from colo_map import describe_colo
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 PANEL_NAME = "StanNG"  # fixed brand name — intentionally not user-editable
 TELEGRAM_CONTACT = "https://t.me/rvivl"
 SESSION_COOKIE = "stanng_session"
@@ -584,9 +584,8 @@ async def api_regenerate_uuid(uid: str, user: str = Depends(require_auth)):
 
 
 def build_links(request: Request, db, ib) -> dict:
-    """Build only the TLS‑based VLESS link for this inbound.
-    IMPORTANT: path and alpn must be encoded with safe characters
-    ('/' for path, ',' for alpn) so that v2rayNG can parse them correctly.
+    """Build VLESS links including TLS, Non-TLS, and info configs.
+    IMPORTANT: path and alpn use safe characters ('/' and ',') so v2rayNG can parse them correctly.
     """
     host = public_host(request, db)
     uid = ib["uid"]
@@ -597,13 +596,43 @@ def build_links(request: Request, db, ib) -> dict:
     sni = (db.get("settings") or {}).get("sni_override") or host
     path = f"/ws/{uid}"
 
-    remark = f"StanNG-{name}-TLS"
-    link = (f"vless://{uuidv}@{host}:443?encryption=none&security=tls"
-            f"&type=ws&host={quote(host)}&path={quote(path, safe='/')}"
-            f"&sni={quote(sni)}&fp={fp}&alpn={quote(alpn, safe=',')}"
-            f"#{quote(remark)}")
+    # ---- TLS config (port 443) ----
+    remark_tls = f"StanNG-{name}-TLS"
+    link_tls = (f"vless://{uuidv}@{host}:443?encryption=none&security=tls"
+                f"&type=ws&host={quote(host)}&path={quote(path, safe='/')}"
+                f"&sni={quote(sni)}&fp={fp}&alpn={quote(alpn, safe=',/')}"
+                f"#{quote(remark_tls)}")
 
-    return {"tls": link}
+    # ---- Non-TLS config (port 80) ----
+    remark_nontls = f"StanNG-{name}-NoTLS"
+    link_nontls = (f"vless://{uuidv}@{host}:80?encryption=none&security=none"
+                   f"&type=ws&host={quote(host)}&path={quote(path, safe='/')}"
+                   f"&sni={quote(sni)}&fp={fp}&alpn={quote(alpn, safe=',/')}"
+                   f"#{quote(remark_nontls)}")
+
+    # ---- Info configs (display-only placeholders) ----
+    # These are intentionally non-functional dummy links that only show info via their remark.
+    st = inbound_status(ib)
+    quota_gb = ib.get("quota_gb") or 0
+    used_gb = st["used"] / (1024 ** 3)
+    quota_txt = f"{used_gb:.2f}/{quota_gb:g}GB" if quota_gb > 0 else f"{used_gb:.2f}GB used"
+    days_txt = f"{st['days_left']}d left" if ib.get("expire_at") else "no expiry"
+    status_remark = f"📊 {quota_txt} | ⏳ {days_txt}"
+    free_remark = "StanNG is Free ❤️"
+
+    dummy_uuid = "00000000-0000-0000-0000-000000000000"
+    dummy_base = f"vless://{dummy_uuid}@127.0.0.1:1?encryption=none&security=none&type=tcp&headerType=none"
+    info_configs = [
+        {"remark": status_remark, "link": f"{dummy_base}#{quote(status_remark)}", "kind": "status"},
+        {"remark": free_remark, "link": f"{dummy_base}#{quote(free_remark)}", "kind": "credit"},
+    ]
+
+    return {
+        "tls": link_tls,
+        "nontls": link_nontls,
+        "info_configs": info_configs,
+        "addresses": [],  # kept for compatibility (clean-IP feature was removed)
+    }
 
 
 @app.get("/api/inbounds/{uid}/links")
@@ -645,8 +674,13 @@ async def sub_plain(uid: str, request: Request):
     if not ib:
         raise HTTPException(404, "not-found")
     links = build_links(request, db, ib)
-    # Only the TLS link is returned – clean, compatible with v2rayNG.
-    raw = links["tls"]
+    
+    # Combine all links: info configs (display-only) + TLS + Non-TLS
+    all_links = (
+        [c["link"] for c in links["info_configs"]]
+        + [links["tls"], links["nontls"]]
+    )
+    raw = "\n".join(all_links)
     b64 = base64.b64encode(raw.encode()).decode()
     return PlainTextResponse(b64, headers={"X-Powered-By": "StanNG"})
 
@@ -670,6 +704,8 @@ async def sub_json(uid: str, request: Request):
         "active_connections": st["active_connections"],
         "links": {
             "tls": links["tls"],
+            "nontls": links["nontls"],
+            "info_configs": links["info_configs"],
         },
     }, headers={"X-Powered-By": "StanNG"})
 
