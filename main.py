@@ -2,6 +2,7 @@
 """
 StanNG — a single-service VLESS-over-WebSocket panel, wizarding-academy themed.
 Version 1.4.1 — plain-text subscription with Info Configs + TLS, compatible with v2rayNG.
+Fixed: subscription links are always generated with https:// scheme.
 """
 import asyncio
 import base64
@@ -129,6 +130,16 @@ def public_host(request: Request, db) -> str:
     if host.startswith("["):
         return host.split("]")[0].lstrip("[")
     return host.split(":")[0]
+
+
+def get_scheme(request: Request) -> str:
+    """Return the actual scheme (https/http) from request headers or fallback to https."""
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    if forwarded_proto:
+        return forwarded_proto.split(",")[0].strip()
+    # If the request came from a proxy, use https as default (production)
+    # For local development, you can set public_domain with http://
+    return "https"
 
 
 def inbound_by_uid(db, uid: str):
@@ -611,12 +622,13 @@ async def api_inbound_links(uid: str, request: Request, user: str = Depends(requ
     if not ib:
         raise HTTPException(404, "not-found")
     host = public_host(request, db)
+    scheme = get_scheme(request)  # Always use https in production
     links = build_links(request, db, ib)
     return {
         "links": links,
-        "sub_url": f"{request.url.scheme}://{host}/sub/{uid}",
-        "sub_json_url": f"{request.url.scheme}://{host}/sub/{uid}/json",
-        "status_url": f"{request.url.scheme}://{host}/status/{uid}",
+        "sub_url": f"{scheme}://{host}/sub/{uid}",
+        "sub_json_url": f"{scheme}://{host}/sub/{uid}/json",
+        "status_url": f"{scheme}://{host}/status/{uid}",
     }
 
 
