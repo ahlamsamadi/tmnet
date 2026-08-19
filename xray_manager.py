@@ -25,6 +25,16 @@ def generate_xray_config(inbounds_data):
 
     config = {
         "log": {"loglevel": "warning"},
+        "dns": {
+            "servers": [
+                "https+local://1.1.1.1/dns-query",
+                "https+local://8.8.8.8/dns-query",
+                "1.1.1.1",
+                "8.8.8.8",
+                "localhost"
+            ],
+            "queryStrategy": "UseIPv4"
+        },
         "api": {
             "tag": "api",
             "services": ["StatsService"]
