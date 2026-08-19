@@ -33,7 +33,7 @@ import xray_manager
 from colo_map import describe_colo
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.5.1"
 PANEL_NAME = "StanNG"
 TELEGRAM_CONTACT = "https://t.me/rvivl"
 SESSION_COOKIE = "stanng_session"
@@ -138,13 +138,8 @@ def public_host(request: Request, db) -> str:
     return host.split(":")[0]
 
 
-def get_scheme(request: Request) -> str:
-    """Return the actual scheme (https/http) from request headers or fallback to https."""
-    forwarded_proto = request.headers.get("x-forwarded-proto")
-    if forwarded_proto:
-        return forwarded_proto.split(",")[0].strip()
-    # If the request came from a proxy, use https as default (production)
-    # For local development, you can set public_domain with http://
+def get_scheme(request: Request = None) -> str:
+    """Always return https scheme for subscription and public endpoints."""
     return "https"
 
 
