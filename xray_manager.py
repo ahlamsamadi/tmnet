@@ -19,10 +19,11 @@ def generate_xray_config(inbounds_data):
             continue
             
         uuid = ib["uuid"]
-        # We use uuid as the email to track stats per user
-        clients_vless.append({"id": uuid, "email": uuid})
-        clients_vmess.append({"id": uuid, "email": uuid})
-        clients_trojan.append({"password": uuid, "email": uuid})
+        uid = ib["uid"]
+        # Use uid as the email so stats can be mapped back to inbound by uid
+        clients_vless.append({"id": uuid, "email": uid})
+        clients_vmess.append({"id": uuid, "email": uid})
+        clients_trojan.append({"password": uuid, "email": uid})
 
     config = {
         "log": {"loglevel": "warning"},
@@ -56,28 +57,32 @@ def generate_xray_config(inbounds_data):
                 "port": 10001,
                 "protocol": "vless",
                 "settings": {"clients": clients_vless, "decryption": "none"},
-                "streamSettings": {"network": "ws", "wsSettings": {"path": "/vl-ws"}}
+                "streamSettings": {"network": "ws", "wsSettings": {"path": "/vl-ws"}},
+                "tag": "inbound-vless-ws"
             },
             {
                 "listen": "127.0.0.1",
                 "port": 10002,
                 "protocol": "vmess",
                 "settings": {"clients": clients_vmess},
-                "streamSettings": {"network": "ws", "wsSettings": {"path": "/vm-ws"}}
+                "streamSettings": {"network": "ws", "wsSettings": {"path": "/vm-ws"}},
+                "tag": "inbound-vmess-ws"
             },
             {
                 "listen": "127.0.0.1",
                 "port": 10003,
                 "protocol": "trojan",
                 "settings": {"clients": clients_trojan},
-                "streamSettings": {"network": "ws", "wsSettings": {"path": "/tr-ws"}}
+                "streamSettings": {"network": "ws", "wsSettings": {"path": "/tr-ws"}},
+                "tag": "inbound-trojan-ws"
             },
             {
                 "listen": "127.0.0.1",
                 "port": 10004,
                 "protocol": "vless",
                 "settings": {"clients": clients_vless, "decryption": "none"},
-                "streamSettings": {"network": "xhttp", "xhttpSettings": {"path": "/vl-xhttp"}}
+                "streamSettings": {"network": "xhttp", "xhttpSettings": {"path": "/vl-xhttp"}},
+                "tag": "inbound-vless-xhttp"
             }
         ],
         "outbounds": [{"protocol": "freedom"}],
@@ -113,6 +118,11 @@ def restart_xray():
 previous_stats = {}
 
 async def get_xray_stats():
+    """Query Xray stats API and return per-uid traffic deltas.
+    
+    Stats are keyed by uid (the email field set in generate_xray_config),
+    so they can be directly matched to inbounds via inbound_by_uid().
+    """
     global previous_stats
     if not os.path.exists(XRAY_BIN):
         return {}
@@ -134,19 +144,19 @@ async def get_xray_stats():
         for name, value in matches:
             parts = name.split(">>>")
             if len(parts) == 4 and parts[0] == "user" and parts[2] == "traffic":
-                uuid = parts[1]
+                uid = parts[1]  # This is the email field = inbound uid
                 direction = parts[3] # uplink or downlink
                 val = int(value)
                 
-                if uuid not in current_stats:
-                    current_stats[uuid] = {"up": 0, "down": 0}
+                if uid not in current_stats:
+                    current_stats[uid] = {"up": 0, "down": 0}
                 if direction == "uplink":
-                    current_stats[uuid]["up"] += val
+                    current_stats[uid]["up"] += val
                 elif direction == "downlink":
-                    current_stats[uuid]["down"] += val
+                    current_stats[uid]["down"] += val
 
-        for uuid, stats in current_stats.items():
-            prev = previous_stats.get(uuid, {"up": 0, "down": 0})
+        for uid, stats in current_stats.items():
+            prev = previous_stats.get(uid, {"up": 0, "down": 0})
             up_delta = stats["up"] - prev["up"]
             down_delta = stats["down"] - prev["down"]
             
@@ -155,11 +165,10 @@ async def get_xray_stats():
             if down_delta < 0: down_delta = stats["down"]
             
             if up_delta > 0 or down_delta > 0:
-                deltas[uuid] = {"up": up_delta, "down": down_delta}
+                deltas[uid] = {"up": up_delta, "down": down_delta}
                 
         previous_stats = current_stats
         return deltas
     except Exception as e:
         logging.error(f"Error querying Xray stats: {e}")
         return {}
-
