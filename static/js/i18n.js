@@ -1,5 +1,5 @@
 /* ===========================================================
-   StanNG — bilingual dictionary (fa / en) v1.4.1
+   StanNG — bilingual dictionary (fa / en) v1.5.2
    Removed: Clean IP, Non‑TLS
    Added: Info Configs descriptions, JSON subscription link
    =========================================================== */
