@@ -1,5 +1,5 @@
 /* ===========================================================
-   StanNG — dashboard controller (v1.4.1)
+   StanNG — dashboard controller (v1.5.3)
    Fully compatible with plain‑text subscription links
    (Info Configs + TLS), no Non‑TLS, no Clean IP.
    =========================================================== */
@@ -14,7 +14,6 @@
     document.getElementById('otaCurrent').textContent = (me.settings && me.settings.app_version) || me.app_version;
     if (me.settings) {
       document.getElementById('settingPublicDomain').value = me.settings.public_domain || '';
-      document.getElementById('settingOtaRepo').value = me.settings.ota_repo || '';
       document.getElementById('settingKeepAlive').checked = me.settings.keep_alive !== false;
       document.getElementById('settingFingerprint').value = me.settings.default_fingerprint || 'chrome';
       document.getElementById('settingAlpn').value = me.settings.default_alpn || 'http/1.1';
@@ -456,7 +455,6 @@
   document.getElementById('saveSettingsBtn').addEventListener('click', async () => {
     const payload = {
       public_domain: document.getElementById('settingPublicDomain').value.trim(),
-      ota_repo: document.getElementById('settingOtaRepo').value.trim(),
       keep_alive: document.getElementById('settingKeepAlive').checked,
     };
     STANNG.setSoundEnabled(document.getElementById('settingSound').checked);
