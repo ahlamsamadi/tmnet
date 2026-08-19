@@ -12,7 +12,6 @@ xray_process = None
 def generate_xray_config(inbounds_data):
     clients_vless = []
     clients_vmess = []
-    clients_trojan = []
 
     for ib in inbounds_data:
         if not ib.get("enabled", True):
@@ -23,7 +22,6 @@ def generate_xray_config(inbounds_data):
         # Use uid as the email so stats can be mapped back to inbound by uid
         clients_vless.append({"id": uuid, "email": uid})
         clients_vmess.append({"id": uuid, "email": uid})
-        clients_trojan.append({"password": uuid, "email": uid})
 
     config = {
         "log": {"loglevel": "warning"},
@@ -67,14 +65,6 @@ def generate_xray_config(inbounds_data):
                 "settings": {"clients": clients_vmess},
                 "streamSettings": {"network": "ws", "wsSettings": {"path": "/vm-ws"}},
                 "tag": "inbound-vmess-ws"
-            },
-            {
-                "listen": "127.0.0.1",
-                "port": 10003,
-                "protocol": "trojan",
-                "settings": {"clients": clients_trojan},
-                "streamSettings": {"network": "ws", "wsSettings": {"path": "/tr-ws"}},
-                "tag": "inbound-trojan-ws"
             },
             {
                 "listen": "127.0.0.1",
