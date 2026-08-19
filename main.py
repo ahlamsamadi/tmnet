@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 StanNG — a single-service VLESS-over-WebSocket panel, wizarding-academy themed.
-Version 1.4.1 — plain-text subscription with Info Configs + TLS, compatible with v2rayNG.
+Version 1.5.2 — plain-text subscription with Info Configs + TLS, compatible with v2rayNG.
 Fixed: subscription links are always generated with https:// scheme.
 """
 import asyncio
@@ -33,7 +33,7 @@ import xray_manager
 from colo_map import describe_colo
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "1.5.1"
+APP_VERSION = "1.5.2"
 PANEL_NAME = "StanNG"
 TELEGRAM_CONTACT = "https://t.me/rvivl"
 SESSION_COOKIE = "stanng_session"
@@ -50,6 +50,11 @@ runtime = {
 }
 
 
+DOH_PRIMARY = "https://1.1.1.1/dns-query"
+DOH_SECONDARY = "https://8.8.8.8/dns-query"
+doh_http_client = httpx.AsyncClient(timeout=6.0, follow_redirects=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     flush_task = asyncio.create_task(_periodic_flush())
@@ -64,6 +69,7 @@ async def lifespan(app: FastAPI):
     yield
     for t in (flush_task, keepalive_task, housekeep_task):
         t.cancel()
+    await doh_http_client.aclose()
 
 
 app = FastAPI(title="StanNG", version=APP_VERSION, lifespan=lifespan)
@@ -245,6 +251,63 @@ async def _keep_alive_loop():
             break
         except Exception:
             await asyncio.sleep(5)
+
+
+# ------------------------------------------------------------------ health and doh
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "version": APP_VERSION}
+
+
+@app.api_route("/dns-query", methods=["GET", "POST", "OPTIONS"])
+async def doh_endpoint(request: Request):
+    """
+    RFC 8484 compliant DNS-over-HTTPS (DoH) proxy.
+    Handles GET wireformat/JSON queries and POST binary dns-message.
+    """
+    if request.method == "OPTIONS":
+        return Response(
+            status_code=204,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Accept",
+            }
+        )
+
+    accept = request.headers.get("accept", "application/dns-message")
+    content_type = request.headers.get("content-type", "application/dns-message")
+    req_headers = {"accept": accept}
+
+    try:
+        if request.method == "POST":
+            req_headers["content-type"] = content_type
+            body = await request.body()
+            try:
+                upstream_res = await doh_http_client.post(DOH_PRIMARY, content=body, headers=req_headers)
+            except Exception:
+                upstream_res = await doh_http_client.post(DOH_SECONDARY, content=body, headers=req_headers)
+        else:
+            params = dict(request.query_params)
+            try:
+                upstream_res = await doh_http_client.get(DOH_PRIMARY, params=params, headers=req_headers)
+            except Exception:
+                upstream_res = await doh_http_client.get(DOH_SECONDARY, params=params, headers=req_headers)
+
+        res_content_type = upstream_res.headers.get("content-type", "application/dns-message")
+        return Response(
+            content=upstream_res.content,
+            status_code=upstream_res.status_code,
+            media_type=res_content_type,
+            headers={
+                "Cache-Control": upstream_res.headers.get("cache-control", "max-age=300"),
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Accept",
+            }
+        )
+    except Exception:
+        return Response(content=b"", status_code=502)
 
 
 # ------------------------------------------------------------------ page routes
@@ -657,6 +720,7 @@ async def api_inbound_links(uid: str, request: Request, user: str = Depends(requ
         "sub_url": f"{scheme}://{host}/sub/{uid}",
         "sub_json_url": f"{scheme}://{host}/sub/{uid}/json",
         "status_url": f"{scheme}://{host}/status/{uid}",
+        "doh_url": f"{scheme}://{host}/dns-query",
     }
 
 
