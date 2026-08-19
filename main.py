@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 StanNG — a single-service VLESS-over-WebSocket panel, wizarding-academy themed.
-Version 1.5.5 — fixed dashboard stats, OTA validation, dynamic info configs, active connections via netstat.
+Version 1.5.5 — fully fixed: OTA, stats, active connections, traffic page, hourly chart.
 """
 import asyncio
 import base64
@@ -888,44 +888,31 @@ async def stats(request: Request, user: str = Depends(require_auth)):
     except Exception:
         pass
 
-    # ========== شمارش اتصالات فعال با شمارش IPهای منحصربه‌فرد ==========
+    # ========== شمارش دقیق اتصالات فعال (IPهای منحصربه‌فرد خارجی) ==========
     def get_active_connections():
         try:
             import subprocess
-            # استفاده از ss برای دقت بیشتر (اگر موجود نباشد، از netstat استفاده می‌کنیم)
-            try:
-                result = subprocess.run(
-                    ["ss", "-tn", "state", "established"],
-                    capture_output=True, text=True, timeout=2
-                )
-                lines = result.stdout.splitlines()
-            except FileNotFoundError:
-                result = subprocess.run(
-                    ["netstat", "-tn", "state", "established"],
-                    capture_output=True, text=True, timeout=2
-                )
-                lines = result.stdout.splitlines()
-            ips = set()
+            import re
+            result = subprocess.run(
+                ["netstat", "-tn"], capture_output=True, text=True, timeout=2
+            )
+            lines = result.stdout.splitlines()
+            target_ports = [10001, 10002, 10004]
+            foreign_ips = set()
+            
             for line in lines:
-                # خطوط شامل IP و پورت هستند، مثلاً: ESTAB 0 0 192.168.1.2:12345 10.0.0.1:10001
-                # ما به دنبال اتصالات به پورت‌های 10001, 10002, 10004 هستیم
-                if any(f":{port}" in line for port in [10001, 10002, 10004]):
-                    # استخراج IP مقصد (سمت راست) - معمولاً آخرین کلمه
-                    parts = line.split()
-                    if len(parts) >= 5:
-                        # فرمت: پروتکل, Recv-Q, Send-Q, Local Address, Foreign Address
-                        # ممکن است در برخی خروجی‌ها ترتیب متفاوت باشد، اما ss و netstat استاندارد هستند
-                        # ساده‌ترین روش: جستجوی IP در خط با regex
-                        import re
-                        # الگوی IP: عدد.عدد.عدد.عدد
-                        ip_pattern = r'\b(\d{1,3}\.){3}\d{1,3}\b'
-                        ips_in_line = re.findall(ip_pattern, line)
-                        # معمولاً دو IP در خط وجود دارد، IP خارجی (مقصد) را انتخاب می‌کنیم
-                        if ips_in_line:
-                            # آدرس خارجی (مقصد) معمولاً آخرین IP است
-                            foreign_ip = ips_in_line[-1]
-                            ips.add(foreign_ip)
-            return len(ips)
+                if "ESTABLISHED" not in line:
+                    continue
+                for port in target_ports:
+                    if f":{port}" in line:
+                        parts = line.split()
+                        if len(parts) >= 5:
+                            foreign_addr = parts[4]
+                            foreign_ip = foreign_addr.split(":")[0]
+                            if foreign_ip != "127.0.0.1" and not foreign_ip.startswith("127."):
+                                foreign_ips.add(foreign_ip)
+                        break
+            return len(foreign_ips)
         except Exception:
             return 0
 
