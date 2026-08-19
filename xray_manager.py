@@ -3,6 +3,7 @@ import os
 import subprocess
 import asyncio
 import logging
+import re
 
 XRAY_CONFIG_PATH = "/usr/local/bin/config.json"
 XRAY_BIN = "/usr/local/bin/xray"
@@ -112,17 +113,15 @@ def restart_xray():
     # Start Xray
     if os.path.exists(XRAY_BIN):
         xray_process = subprocess.Popen([XRAY_BIN, "run", "-c", XRAY_CONFIG_PATH])
+        print(f"✅ Xray restarted with config: {XRAY_CONFIG_PATH}")
     else:
         logging.warning("Xray binary not found. Running in mock/dev mode.")
+        print("⚠️ Xray binary not found at", XRAY_BIN)
 
 previous_stats = {}
 
 async def get_xray_stats():
-    """Query Xray stats API and return per-uid traffic deltas.
-    
-    Stats are keyed by uid (the email field set in generate_xray_config),
-    so they can be directly matched to inbounds via inbound_by_uid().
-    """
+    """Query Xray stats using statsquery (text output) and parse with regex."""
     global previous_stats
     if not os.path.exists(XRAY_BIN):
         return {}
@@ -133,19 +132,28 @@ async def get_xray_stats():
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        stdout, _ = await proc.communicate()
+        stdout, stderr = await proc.communicate()
         out = stdout.decode("utf-8")
         
-        deltas = {}
-        import re
+        if not out.strip():
+            # No stats yet – return empty
+            return {}
+        
+        # Regex to match lines like: name: "user>>>uid>>>traffic>>>uplink" value: 12345
+        # More robust: allow multiple spaces and optional quotes
         matches = re.findall(r'name:\s*"([^"]+)"\s*value:\s*(\d+)', out)
+        if not matches:
+            # Try alternative format without quotes? Actually Xray always uses quotes.
+            # If still no match, log and return empty.
+            print("⚠️ No stats entries found in Xray output.")
+            return {}
         
         current_stats = {}
         for name, value in matches:
             parts = name.split(">>>")
             if len(parts) == 4 and parts[0] == "user" and parts[2] == "traffic":
-                uid = parts[1]  # This is the email field = inbound uid
-                direction = parts[3] # uplink or downlink
+                uid = parts[1]          # email = inbound uid
+                direction = parts[3]    # uplink or downlink
                 val = int(value)
                 
                 if uid not in current_stats:
@@ -155,20 +163,25 @@ async def get_xray_stats():
                 elif direction == "downlink":
                     current_stats[uid]["down"] += val
 
+        # Compute deltas since last poll
+        deltas = {}
         for uid, stats in current_stats.items():
             prev = previous_stats.get(uid, {"up": 0, "down": 0})
             up_delta = stats["up"] - prev["up"]
             down_delta = stats["down"] - prev["down"]
             
-            # If Xray restarted, value might be less than prev, just take current as delta
-            if up_delta < 0: up_delta = stats["up"]
-            if down_delta < 0: down_delta = stats["down"]
+            # If Xray restarted, values may reset; treat as full delta
+            if up_delta < 0:
+                up_delta = stats["up"]
+            if down_delta < 0:
+                down_delta = stats["down"]
             
             if up_delta > 0 or down_delta > 0:
                 deltas[uid] = {"up": up_delta, "down": down_delta}
                 
         previous_stats = current_stats
         return deltas
+        
     except Exception as e:
         logging.error(f"Error querying Xray stats: {e}")
         return {}
