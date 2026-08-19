@@ -29,7 +29,7 @@ from fastapi.templating import Jinja2Templates
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 from storage import store, hash_password, verify_password
-from vless_engine import relay
+import xray_manager
 from colo_map import describe_colo
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -55,6 +55,12 @@ async def lifespan(app: FastAPI):
     flush_task = asyncio.create_task(_periodic_flush())
     keepalive_task = asyncio.create_task(_keep_alive_loop())
     housekeep_task = asyncio.create_task(_housekeeping_loop())
+    
+    # Initialize Xray config and start it
+    db = await store.get()
+    xray_manager.generate_xray_config(db.get("inbounds", []))
+    xray_manager.restart_xray()
+    
     yield
     for t in (flush_task, keepalive_task, housekeep_task):
         t.cancel()
@@ -178,12 +184,10 @@ async def _periodic_flush():
     while True:
         try:
             await asyncio.sleep(5)
-            pending = runtime["pending_traffic"]
-            if not pending:
+            # Use Xray stats
+            snapshot = await xray_manager.get_xray_stats()
+            if not snapshot:
                 continue
-            async with runtime["lock"]:
-                snapshot = pending.copy()
-                runtime["pending_traffic"] = {}
 
             def _apply(db):
                 total_up = total_down = 0
@@ -239,7 +243,7 @@ async def _keep_alive_loop():
             await asyncio.sleep(interval)
             if not (db.get("settings") or {}).get("keep_alive", True):
                 continue
-            port = os.environ.get("PORT", "8000")
+            port = os.environ.get("PANEL_PORT", "10000")
             async with httpx.AsyncClient(timeout=5) as client:
                 await client.get(f"http://127.0.0.1:{port}/health")
         except asyncio.CancelledError:
@@ -502,6 +506,8 @@ async def api_create_inbound(request: Request, user: str = Depends(require_auth)
         db["inbounds"].append(ib)
 
     db = await store.mutate(_apply)
+    xray_manager.generate_xray_config(db["inbounds"])
+    xray_manager.restart_xray()
     return {"ok": True, "inbound": serialize_inbound(ib)}
 
 
@@ -525,6 +531,8 @@ async def api_update_inbound(uid: str, request: Request, user: str = Depends(req
         updated.update(ib)
 
     db = await store.mutate(_apply)
+    xray_manager.generate_xray_config(db["inbounds"])
+    xray_manager.restart_xray()
     return {"ok": True, "inbound": serialize_inbound(updated)}
 
 
@@ -541,6 +549,11 @@ async def api_delete_inbound(uid: str, user: str = Depends(require_auth)):
     runtime["active"].pop(uid, None)
     if not found["v"]:
         raise HTTPException(404, "not-found")
+        
+    # Re-fetch db to get the updated inbounds
+    db = await store.get()
+    xray_manager.generate_xray_config(db["inbounds"])
+    xray_manager.restart_xray()
     return {"ok": True}
 
 
@@ -569,38 +582,59 @@ async def api_regenerate_uuid(uid: str, user: str = Depends(require_auth)):
 
     db = await store.mutate(_apply)
     runtime["active"].pop(uid, None)
+    xray_manager.generate_xray_config(db["inbounds"])
+    xray_manager.restart_xray()
     return {"ok": True, "inbound": serialize_inbound(inbound_by_uid(db, uid))}
 
 
 def build_links(request: Request, db, ib) -> dict:
     """
-    Build VLESS links: Info Configs (display-only) + TLS config.
-    IMPORTANT: path and alpn use safe characters ('/' and ',') so v2rayNG can parse them correctly.
+    Build VLESS, VMess, and Trojan links for WS and XHTTP.
     """
     host = public_host(request, db)
-    uid = ib["uid"]
     uuidv = ib["uuid"]
     name = ib["name"]
     fp = ib.get("fp") or (db.get("settings") or {}).get("default_fingerprint", "chrome")
     alpn = (db.get("settings") or {}).get("default_alpn", "http/1.1")
     sni = (db.get("settings") or {}).get("sni_override") or host
-    path = f"/ws/{uid}"
+    
+    # Non-TLS uses port 80
+    port_tls = 443
+    port_ntls = 80
 
-    # ---- TLS config (port 443) ----
-    remark_tls = f"StanNG-{name}-TLS"
-    link_tls = (f"vless://{uuidv}@{host}:443?encryption=none&security=tls"
-                f"&type=ws&host={quote(host)}&path={quote(path, safe='/')}"
-                f"&sni={quote(sni)}&fp={fp}&alpn={quote(alpn, safe=',/')}"
-                f"#{quote(remark_tls)}")
+    # 1. VLESS WS
+    vl_ws_tls = f"vless://{uuidv}@{host}:{port_tls}?encryption=none&security=tls&type=ws&host={quote(host)}&path={quote('/vl-ws', safe='/')}&sni={quote(sni)}&fp={fp}&alpn={quote(alpn, safe=',/')}#{quote(f'StanNG-{name}-VL-WS-TLS')}"
+    vl_ws_ntls = f"vless://{uuidv}@{host}:{port_ntls}?encryption=none&security=none&type=ws&host={quote(host)}&path={quote('/vl-ws', safe='/')}#{quote(f'StanNG-{name}-VL-WS-NTLS')}"
 
-    # ---- Info configs (display-only placeholders) ----
+    # 2. VMess WS
+    def make_vmess(port, tls_mode, remark):
+        vm_json = {
+            "v": "2", "ps": remark, "add": host, "port": port, "id": uuidv,
+            "aid": "0", "scy": "auto", "net": "ws", "type": "none",
+            "host": host, "path": "/vm-ws", "tls": tls_mode, "sni": sni, "alpn": alpn
+        }
+        b64 = base64.b64encode(json.dumps(vm_json).encode()).decode()
+        return f"vmess://{b64}"
+    
+    vm_ws_tls = make_vmess(port_tls, "tls", f"StanNG-{name}-VM-WS-TLS")
+    vm_ws_ntls = make_vmess(port_ntls, "", f"StanNG-{name}-VM-WS-NTLS")
+
+    # 3. Trojan WS
+    tr_ws_tls = f"trojan://{uuidv}@{host}:{port_tls}?security=tls&type=ws&host={quote(host)}&path={quote('/tr-ws', safe='/')}&sni={quote(sni)}&fp={fp}&alpn={quote(alpn, safe=',/')}#{quote(f'StanNG-{name}-TR-WS-TLS')}"
+    tr_ws_ntls = f"trojan://{uuidv}@{host}:{port_ntls}?security=none&type=ws&host={quote(host)}&path={quote('/tr-ws', safe='/')}#{quote(f'StanNG-{name}-TR-WS-NTLS')}"
+
+    # 4. VLESS XHTTP
+    vl_xh_tls = f"vless://{uuidv}@{host}:{port_tls}?encryption=none&security=tls&type=xhttp&host={quote(host)}&path={quote('/vl-xhttp', safe='/')}&sni={quote(sni)}&fp={fp}&alpn={quote(alpn, safe=',/')}#{quote(f'StanNG-{name}-VL-XHTTP-TLS')}"
+    vl_xh_ntls = f"vless://{uuidv}@{host}:{port_ntls}?encryption=none&security=none&type=xhttp&host={quote(host)}&path={quote('/vl-xhttp', safe='/')}#{quote(f'StanNG-{name}-VL-XHTTP-NTLS')}"
+
+    # Info configs
     st = inbound_status(ib)
     quota_gb = ib.get("quota_gb") or 0
     used_gb = st["used"] / (1024 ** 3)
     quota_txt = f"{used_gb:.2f}/{quota_gb:g}GB" if quota_gb > 0 else f"{used_gb:.2f}GB used"
     days_txt = f"{st['days_left']}d left" if ib.get("expire_at") else "no expiry"
     status_remark = f"📊 {quota_txt} | ⏳ {days_txt}"
-    free_remark = "StanNG is Free ❤️"
+    free_remark = "StanNG Multi-Protocol ❤️"
 
     dummy_uuid = "00000000-0000-0000-0000-000000000000"
     dummy_base = f"vless://{dummy_uuid}@127.0.0.1:1?encryption=none&security=none&type=tcp&headerType=none"
@@ -609,8 +643,16 @@ def build_links(request: Request, db, ib) -> dict:
         {"remark": free_remark, "link": f"{dummy_base}#{quote(free_remark)}", "kind": "credit"},
     ]
 
+    all_links = [
+        vl_ws_tls, vl_ws_ntls,
+        vm_ws_tls, vm_ws_ntls,
+        tr_ws_tls, tr_ws_ntls,
+        vl_xh_tls, vl_xh_ntls
+    ]
+
     return {
-        "tls": link_tls,
+        "tls": vl_ws_tls,  # Keep primary for QR code
+        "all_links": all_links,
         "info_configs": info_configs,
     }
 
@@ -661,15 +703,17 @@ async def sub_plain(uid: str, request: Request):
         raise HTTPException(404, "not-found")
     links = build_links(request, db, ib)
     
-    # Combine links: Info Configs (display-only) + TLS
-    all_links = (
+    # Combine links: Info Configs (display-only) + all protocol links
+    combined = (
         [c["link"] for c in links["info_configs"]]
-        + [links["tls"]]
+        + links["all_links"]
     )
-    raw = "\n".join(all_links)
+    raw = "\n".join(combined)
     
-    # Return plain text (not Base64) so users can see the links directly
-    return PlainTextResponse(raw, headers={"X-Powered-By": "StanNG"})
+    # Base64 encode for wider client compatibility
+    b64 = base64.b64encode(raw.encode()).decode()
+    
+    return PlainTextResponse(b64, headers={"X-Powered-By": "StanNG"})
 
 
 @app.get("/sub/{uid}/json")
@@ -691,6 +735,7 @@ async def sub_json(uid: str, request: Request):
         "active_connections": st["active_connections"],
         "links": {
             "tls": links["tls"],
+            "all_links": links["all_links"],
             "info_configs": links["info_configs"],
         },
     }, headers={"X-Powered-By": "StanNG"})
@@ -923,66 +968,8 @@ async def api_ota_update(request: Request, user: str = Depends(require_auth)):
         }
 
 
-# ------------------------------------------------------------------ VLESS websocket endpoint
-@app.websocket("/ws/{uid}")
-async def ws_endpoint(websocket: WebSocket, uid: str):
-    db = await store.get()
-    ib = inbound_by_uid(db, uid)
-    if not ib:
-        await websocket.close(code=1008)
-        return
-
-    st = inbound_status(ib)
-    if not st["live_enabled"]:
-        await websocket.close(code=1008)
-        return
-
-    ip = websocket.headers.get("x-forwarded-for", "")
-    ip = ip.split(",")[0].strip() if ip else (websocket.client.host if websocket.client else "unknown")
-
-    active_for_uid = runtime["active"].setdefault(uid, {})
-    max_conn = ib.get("max_connections") or 0
-    strict = bool(ib.get("strict_single_ip"))
-
-    if strict:
-        existing_ips = {v["ip"] for v in active_for_uid.values()}
-        if existing_ips and ip not in existing_ips:
-            await websocket.close(code=1008)
-            return
-    if max_conn > 0 and len(active_for_uid) >= max_conn:
-        await websocket.close(code=1008)
-        return
-
-    await websocket.accept(subprotocol=websocket.headers.get("sec-websocket-protocol"))
-
-    conn_id = secrets.token_hex(6)
-    active_for_uid[conn_id] = {"ip": ip, "since": time.time()}
-
-    def _bump_request(db):
-        target = inbound_by_uid(db, uid)
-        if target:
-            target["request_count"] = target.get("request_count", 0) + 1
-
-    await store.mutate(_bump_request)
-
-    def on_traffic(du, dd):
-        bucket = runtime["pending_traffic"].setdefault(uid, {"up": 0, "down": 0})
-        bucket["up"] += du
-        bucket["down"] += dd
-
-    try:
-        await relay(websocket, ib["uuid"], on_traffic)
-    except WebSocketDisconnect:
-        pass
-    except Exception:
-        pass
-    finally:
-        active_for_uid.pop(conn_id, None)
-        if not active_for_uid:
-            runtime["active"].pop(uid, None)
-
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")
+    port = int(os.environ.get("PANEL_PORT", 10000))
+    uvicorn.run("main:app", host="127.0.0.1", port=port, log_level="info")
