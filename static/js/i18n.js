@@ -109,6 +109,11 @@ window.I18N = {
   inb_sub_link_json: { fa: 'لینک اشتراک JSON', en: 'JSON Subscription Link' },
   inb_status_link: { fa: 'لینک وضعیت (برای کاربر)', en: 'Status Link (for user)' },
   inb_link_tls: { fa: 'کانفیگ TLS (پورت ۴۴۳)', en: 'TLS Config (port 443)' },
+  inb_doh_link: { fa: 'آدرس سرور DoH (DNS-over-HTTPS)', en: 'DoH Server URL (DNS-over-HTTPS)' },
+  inb_doh_note: {
+    fa: 'قابل استفاده در کلاینت‌های v2rayNG / Sing-box و تنظیمات DNS امن مرورگرها',
+    en: 'Usable in v2rayNG / Sing-box clients and browser Secure DNS settings'
+  },
   // حذف inb_link_nontls, inb_link_addresses
   inb_sub_note: {
     fa: 'لینک اشتراک شامل دو کانفیگ نمایشی (وضعیت مصرف و پیام رایگان) به‌همراه کانفیگ TLS است.',
