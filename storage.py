@@ -25,7 +25,6 @@ DEFAULT_DB: Dict[str, Any] = {
         "theme": "dark",
         "public_domain": "",         # optional override; else derived from request Host header
         "keep_alive": True,
-        "ota_repo": "your-username/StanNG",
         # NOTE: app_version is intentionally NOT stored here. It must always
         # reflect the code actually running on disk (main.py's APP_VERSION),
         # never a stale value frozen into db.json from an earlier install —
@@ -33,7 +32,7 @@ DEFAULT_DB: Dict[str, Any] = {
         # version after every update.
         # ---- advanced config defaults (applied to newly generated VLESS links) ----
         "default_fingerprint": "chrome",     # chrome | ios | firefox | edge | random
-        "default_alpn": "http/1.1",          # http/1.1 | h2,http/1.1 | h3,h2,http/1.1
+        "default_alpn": "h2,http/1.1",          # http/1.1 | h2,http/1.1 | h3,h2,http/1.1
         "sni_override": "",                  # optional domain-fronting SNI; blank = use host
         "fragment_enabled": True,
         "fragment_packets": "tlshello",
@@ -89,10 +88,12 @@ def load_db() -> Dict[str, Any]:
             if k not in db["settings"]:
                 db["settings"][k] = v
                 changed = True
-        # Migration: drop any stale app_version previously persisted by an
-        # older build — it must never override the code's real APP_VERSION.
+        # Migration: drop any stale app_version or ota_repo previously persisted
         if "app_version" in db["settings"]:
             del db["settings"]["app_version"]
+            changed = True
+        if "ota_repo" in db["settings"]:
+            del db["settings"]["ota_repo"]
             changed = True
     if not db.get("secret_key"):
         db["secret_key"] = secrets.token_hex(32)
