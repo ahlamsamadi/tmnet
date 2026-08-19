@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 StanNG — a single-service VLESS-over-WebSocket panel, wizarding-academy themed.
-Version 1.5.5 — fixed dashboard stats, OTA validation, dynamic info configs.
+Version 1.5.5 — fixed dashboard stats, OTA validation, dynamic info configs, active connections via netstat.
 """
 import asyncio
 import base64
@@ -888,7 +888,49 @@ async def stats(request: Request, user: str = Depends(require_auth)):
     except Exception:
         pass
 
-    total_active = sum(len(v) for v in runtime["active"].values())
+    # ========== شمارش اتصالات فعال با شمارش IPهای منحصربه‌فرد ==========
+    def get_active_connections():
+        try:
+            import subprocess
+            # استفاده از ss برای دقت بیشتر (اگر موجود نباشد، از netstat استفاده می‌کنیم)
+            try:
+                result = subprocess.run(
+                    ["ss", "-tn", "state", "established"],
+                    capture_output=True, text=True, timeout=2
+                )
+                lines = result.stdout.splitlines()
+            except FileNotFoundError:
+                result = subprocess.run(
+                    ["netstat", "-tn", "state", "established"],
+                    capture_output=True, text=True, timeout=2
+                )
+                lines = result.stdout.splitlines()
+            ips = set()
+            for line in lines:
+                # خطوط شامل IP و پورت هستند، مثلاً: ESTAB 0 0 192.168.1.2:12345 10.0.0.1:10001
+                # ما به دنبال اتصالات به پورت‌های 10001, 10002, 10004 هستیم
+                if any(f":{port}" in line for port in [10001, 10002, 10004]):
+                    # استخراج IP مقصد (سمت راست) - معمولاً آخرین کلمه
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        # فرمت: پروتکل, Recv-Q, Send-Q, Local Address, Foreign Address
+                        # ممکن است در برخی خروجی‌ها ترتیب متفاوت باشد، اما ss و netstat استاندارد هستند
+                        # ساده‌ترین روش: جستجوی IP در خط با regex
+                        import re
+                        # الگوی IP: عدد.عدد.عدد.عدد
+                        ip_pattern = r'\b(\d{1,3}\.){3}\d{1,3}\b'
+                        ips_in_line = re.findall(ip_pattern, line)
+                        # معمولاً دو IP در خط وجود دارد، IP خارجی (مقصد) را انتخاب می‌کنیم
+                        if ips_in_line:
+                            # آدرس خارجی (مقصد) معمولاً آخرین IP است
+                            foreign_ip = ips_in_line[-1]
+                            ips.add(foreign_ip)
+            return len(ips)
+        except Exception:
+            return 0
+
+    total_active = get_active_connections()
+    # ==============================================================
 
     # Build a continuous 24-hour timeline from (now - 23h) to current hour
     raw_hourly = {item["t"]: item for item in db["stats"].get("hourly", []) if "t" in item}
