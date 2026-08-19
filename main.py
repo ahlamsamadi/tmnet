@@ -190,22 +190,23 @@ async def _periodic_flush():
     while True:
         try:
             await asyncio.sleep(5)
-            # Use Xray stats
             snapshot = await xray_manager.get_xray_stats()
-            if not snapshot:
-                continue
+            # حتی اگر snapshot خالی باشد، باکت ساعتی را به‌روز می‌کنیم
 
-            def _apply(db):
+            def _apply(db, snap=snapshot):
                 total_up = total_down = 0
-                for uid, delta in snapshot.items():
-                    ib = inbound_by_uid(db, uid)
-                    if ib:
-                        ib["used_up"] = ib.get("used_up", 0) + delta.get("up", 0)
-                        ib["used_down"] = ib.get("used_down", 0) + delta.get("down", 0)
-                        total_up += delta.get("up", 0)
-                        total_down += delta.get("down", 0)
-                db["stats"]["total_up"] = db["stats"].get("total_up", 0) + total_up
-                db["stats"]["total_down"] = db["stats"].get("total_down", 0) + total_down
+                if snap:
+                    for uid, delta in snap.items():
+                        ib = inbound_by_uid(db, uid)
+                        if ib:
+                            ib["used_up"] = ib.get("used_up", 0) + delta.get("up", 0)
+                            ib["used_down"] = ib.get("used_down", 0) + delta.get("down", 0)
+                            total_up += delta.get("up", 0)
+                            total_down += delta.get("down", 0)
+                    db["stats"]["total_up"] = db["stats"].get("total_up", 0) + total_up
+                    db["stats"]["total_down"] = db["stats"].get("total_down", 0) + total_down
+
+                # همیشه باکت ساعتی را به‌روز کن (حتی با مقدار صفر)
                 hourly = db["stats"].setdefault("hourly", [])
                 bucket = int(time.time() // 3600) * 3600
                 if hourly and hourly[-1]["t"] == bucket:
@@ -216,8 +217,7 @@ async def _periodic_flush():
                 while len(hourly) > 72:
                     hourly.pop(0)
 
-            if snapshot:
-                await store.mutate(_apply)
+            await store.mutate(_apply)
         except asyncio.CancelledError:
             break
         except Exception:
@@ -1057,6 +1057,10 @@ async def api_ota_update(request: Request, user: str = Depends(require_auth)):
                 _shutil.rmtree(staged_data, ignore_errors=True)
 
             touched = _apply_staged_update(staged_dir, BASE_DIR)
+            # 🛠️ تغییر باگ ۱: اگر هیچ فایلی کپی نشد، خطا بده
+            if not touched:
+                _shutil.rmtree(tmp_root, ignore_errors=True)
+                raise HTTPException(502, "update-failed-no-files-copied")
             _shutil.rmtree(tmp_root, ignore_errors=True)
 
         except HTTPException:
