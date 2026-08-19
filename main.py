@@ -589,7 +589,9 @@ async def api_regenerate_uuid(uid: str, user: str = Depends(require_auth)):
 
 def build_links(request: Request, db, ib) -> dict:
     """
-    Build VLESS, VMess, and Trojan links for WS and XHTTP.
+    Build VLESS and VMess TLS links for WS and XHTTP.
+    All non-TLS and Trojan configs are excluded.
+    XHTTP strictly uses alpn=h2.
     """
     host = public_host(request, db)
     uuidv = ib["uuid"]
@@ -597,16 +599,12 @@ def build_links(request: Request, db, ib) -> dict:
     fp = ib.get("fp") or (db.get("settings") or {}).get("default_fingerprint", "chrome")
     alpn = (db.get("settings") or {}).get("default_alpn", "http/1.1")
     sni = (db.get("settings") or {}).get("sni_override") or host
-    
-    # Non-TLS uses port 80
     port_tls = 443
-    port_ntls = 80
 
-    # 1. VLESS WS
+    # 1. VLESS WS (TLS)
     vl_ws_tls = f"vless://{uuidv}@{host}:{port_tls}?encryption=none&security=tls&type=ws&host={quote(host)}&path={quote('/vl-ws', safe='/')}&sni={quote(sni)}&fp={fp}&alpn={quote(alpn, safe=',/')}#{quote(f'StanNG-{name}-VL-WS-TLS')}"
-    vl_ws_ntls = f"vless://{uuidv}@{host}:{port_ntls}?encryption=none&security=none&type=ws&host={quote(host)}&path={quote('/vl-ws', safe='/')}#{quote(f'StanNG-{name}-VL-WS-NTLS')}"
 
-    # 2. VMess WS
+    # 2. VMess WS (TLS)
     def make_vmess(port, tls_mode, remark):
         vm_json = {
             "v": "2", "ps": remark, "add": host, "port": port, "id": uuidv,
@@ -617,15 +615,9 @@ def build_links(request: Request, db, ib) -> dict:
         return f"vmess://{b64}"
     
     vm_ws_tls = make_vmess(port_tls, "tls", f"StanNG-{name}-VM-WS-TLS")
-    vm_ws_ntls = make_vmess(port_ntls, "", f"StanNG-{name}-VM-WS-NTLS")
 
-    # 3. Trojan WS
-    tr_ws_tls = f"trojan://{uuidv}@{host}:{port_tls}?security=tls&type=ws&host={quote(host)}&path={quote('/tr-ws', safe='/')}&sni={quote(sni)}&fp={fp}&alpn={quote(alpn, safe=',/')}#{quote(f'StanNG-{name}-TR-WS-TLS')}"
-    tr_ws_ntls = f"trojan://{uuidv}@{host}:{port_ntls}?security=none&type=ws&host={quote(host)}&path={quote('/tr-ws', safe='/')}#{quote(f'StanNG-{name}-TR-WS-NTLS')}"
-
-    # 4. VLESS XHTTP
-    vl_xh_tls = f"vless://{uuidv}@{host}:{port_tls}?encryption=none&security=tls&type=xhttp&host={quote(host)}&path={quote('/vl-xhttp', safe='/')}&sni={quote(sni)}&fp={fp}&alpn={quote(alpn, safe=',/')}#{quote(f'StanNG-{name}-VL-XHTTP-TLS')}"
-    vl_xh_ntls = f"vless://{uuidv}@{host}:{port_ntls}?encryption=none&security=none&type=xhttp&host={quote(host)}&path={quote('/vl-xhttp', safe='/')}#{quote(f'StanNG-{name}-VL-XHTTP-NTLS')}"
+    # 3. VLESS XHTTP (TLS) - ALPN strictly set to h2
+    vl_xh_tls = f"vless://{uuidv}@{host}:{port_tls}?encryption=none&security=tls&type=xhttp&host={quote(host)}&path={quote('/vl-xhttp', safe='/')}&sni={quote(sni)}&fp={fp}&alpn=h2#{quote(f'StanNG-{name}-VL-XHTTP-TLS')}"
 
     # Info configs
     st = inbound_status(ib)
@@ -644,10 +636,9 @@ def build_links(request: Request, db, ib) -> dict:
     ]
 
     all_links = [
-        vl_ws_tls, vl_ws_ntls,
-        vm_ws_tls, vm_ws_ntls,
-        tr_ws_tls, tr_ws_ntls,
-        vl_xh_tls, vl_xh_ntls
+        vl_ws_tls,
+        vm_ws_tls,
+        vl_xh_tls
     ]
 
     return {
