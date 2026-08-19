@@ -390,6 +390,10 @@
       
       // لینک JSON
       document.getElementById('linkSubJson').textContent = r.sub_json_url || '';
+
+      // لینک DoH
+      const elDoh = document.getElementById('linkDoh');
+      if (elDoh) elDoh.textContent = r.doh_url || '';
       
       // QR Code
       document.getElementById('qrImg').src = `/api/inbounds/${uid}/qr?t=${Date.now()}`;
