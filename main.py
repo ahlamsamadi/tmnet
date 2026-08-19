@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 StanNG — a single-service VLESS-over-WebSocket panel, wizarding-academy themed.
-Version 1.5.2 — plain-text subscription with Info Configs + TLS, compatible with v2rayNG.
+Version 1.5.3 — plain-text subscription with Info Configs + TLS, compatible with v2rayNG.
 Fixed: subscription links are always generated with https:// scheme.
 """
 import asyncio
@@ -33,9 +33,14 @@ import xray_manager
 from colo_map import describe_colo
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "1.5.2"
+APP_VERSION = "1.5.3"
 PANEL_NAME = "StanNG"
 TELEGRAM_CONTACT = "https://t.me/rvivl"
+OTA_REPO = "youdidking/stanngv2"
+OTA_HEADERS = {
+    "Accept": "application/vnd.github+json",
+    "User-Agent": f"StanNG-Panel/{APP_VERSION}",
+}
 SESSION_COOKIE = "stanng_session"
 SESSION_MAX_AGE = 60 * 60 * 24 * 7
 LOGIN_MAX_ATTEMPTS = 6
@@ -492,7 +497,7 @@ async def api_change_password(request: Request, user: str = Depends(require_auth
 async def api_update_settings(request: Request, user: str = Depends(require_auth)):
     payload = await request.json()
     allowed = {
-        "lang", "theme", "public_domain", "keep_alive", "ota_repo",
+        "lang", "theme", "public_domain", "keep_alive",
         "default_fingerprint", "default_alpn", "sni_override",
         "fragment_enabled", "fragment_packets", "fragment_length", "fragment_interval",
     }
@@ -677,7 +682,7 @@ def build_links(request: Request, db, ib) -> dict:
     # 3. VLESS XHTTP (TLS) - ALPN strictly set to h2
     vl_xh_tls = f"vless://{uuidv}@{host}:{port_tls}?encryption=none&security=tls&type=xhttp&host={quote(host)}&path={quote('/vl-xhttp', safe='/')}&sni={quote(sni)}&fp={fp}&alpn=h2#{quote(f'StanNG-{name}-VL-XHTTP-TLS')}"
 
-    # Info configs
+    # Info configs (display-only) with distinct dummy endpoints to prevent client database collisions
     st = inbound_status(ib)
     quota_gb = ib.get("quota_gb") or 0
     used_gb = st["used"] / (1024 ** 3)
@@ -686,11 +691,13 @@ def build_links(request: Request, db, ib) -> dict:
     status_remark = f"📊 {quota_txt} | ⏳ {days_txt}"
     free_remark = "StanNG Multi-Protocol ❤️"
 
-    dummy_uuid = "00000000-0000-0000-0000-000000000000"
-    dummy_base = f"vless://{dummy_uuid}@127.0.0.1:1?encryption=none&security=none&type=tcp&headerType=none"
+    dummy_uuid_status = "00000000-0000-0000-0000-000000000001"
+    dummy_uuid_credit = "00000000-0000-0000-0000-000000000002"
+    dummy_link_status = f"vless://{dummy_uuid_status}@127.0.0.1:10001?encryption=none&security=none&type=tcp&headerType=none#{quote(status_remark)}"
+    dummy_link_credit = f"vless://{dummy_uuid_credit}@127.0.0.1:10002?encryption=none&security=none&type=tcp&headerType=none#{quote(free_remark)}"
     info_configs = [
-        {"remark": status_remark, "link": f"{dummy_base}#{quote(status_remark)}", "kind": "status"},
-        {"remark": free_remark, "link": f"{dummy_base}#{quote(free_remark)}", "kind": "credit"},
+        {"remark": status_remark, "link": dummy_link_status, "kind": "status"},
+        {"remark": free_remark, "link": dummy_link_credit, "kind": "credit"},
     ]
 
     all_links = [
@@ -743,14 +750,14 @@ async def api_inbound_qr(uid: str, request: Request, user: str = Depends(require
 @app.get("/sub/{uid}")
 async def sub_plain(uid: str, request: Request):
     """
-    Returns plain-text VLESS links (not Base64 encoded).
-    Includes Info Configs (display-only) + TLS config.
-    This format is compatible with v2rayNG and other clients.
+    Returns base64-encoded subscription links with dynamic info configs and standard headers.
+    Includes fresh Subscription-Userinfo and cache prevention headers.
     """
     db = await store.get()
     ib = inbound_by_uid(db, uid)
     if not ib:
         raise HTTPException(404, "not-found")
+    st = inbound_status(ib)
     links = build_links(request, db, ib)
     
     # Combine links: Info Configs (display-only) + all protocol links
@@ -763,7 +770,25 @@ async def sub_plain(uid: str, request: Request):
     # Base64 encode for wider client compatibility
     b64 = base64.b64encode(raw.encode()).decode()
     
-    return PlainTextResponse(b64, headers={"X-Powered-By": "StanNG"})
+    used_up = int(ib.get("used_up") or 0)
+    used_down = int(ib.get("used_down") or 0)
+    total_bytes = int(st["quota_bytes"])
+    expire_ts = int(ib.get("expire_at") or 0)
+    user_info_header = f"upload={used_up}; download={used_down}; total={total_bytes}; expire={expire_ts}"
+
+    headers = {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Subscription-Userinfo": user_info_header,
+        "subscription-userinfo": user_info_header,
+        "Profile-Update-Interval": "1",
+        "profile-update-interval": "1",
+        "Profile-Title": f"base64:{base64.b64encode(ib['name'].encode()).decode()}",
+        "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+        "X-Powered-By": "StanNG",
+    }
+    return Response(content=b64, media_type="text/plain", headers=headers)
 
 
 @app.get("/sub/{uid}/json")
@@ -774,13 +799,30 @@ async def sub_json(uid: str, request: Request):
         raise HTTPException(404, "not-found")
     st = inbound_status(ib)
     links = build_links(request, db, ib)
+    used_up = int(ib.get("used_up") or 0)
+    used_down = int(ib.get("used_down") or 0)
+    total_bytes = int(st["quota_bytes"])
+    expire_ts = int(ib.get("expire_at") or 0)
+    user_info_header = f"upload={used_up}; download={used_down}; total={total_bytes}; expire={expire_ts}"
+    headers = {
+        "Subscription-Userinfo": user_info_header,
+        "subscription-userinfo": user_info_header,
+        "Profile-Update-Interval": "1",
+        "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+        "X-Powered-By": "StanNG",
+    }
     return JSONResponse({
         "name": ib["name"],
         "uid": uid,
         "enabled": st["live_enabled"],
         "quota_gb": ib.get("quota_gb"),
         "used_gb": round(st["used"] / (1024 ** 3), 3),
+        "used_bytes": st["used"],
+        "quota_bytes": st["quota_bytes"],
         "days_left": st["days_left"],
+        "expire_at": ib.get("expire_at"),
         "max_connections": ib.get("max_connections"),
         "active_connections": st["active_connections"],
         "links": {
@@ -788,7 +830,7 @@ async def sub_json(uid: str, request: Request):
             "all_links": links["all_links"],
             "info_configs": links["info_configs"],
         },
-    }, headers={"X-Powered-By": "StanNG"})
+    }, headers=headers)
 
 
 @app.get("/api/inbounds/{uid}/sub")
@@ -804,7 +846,11 @@ async def api_public_status(uid: str):
     if not ib:
         raise HTTPException(404, "not-found")
     st = inbound_status(ib)
-    return {
+    headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+    }
+    return JSONResponse({
         "name": ib["name"],
         "enabled": st["live_enabled"],
         "quota_gb": ib.get("quota_gb"),
@@ -817,7 +863,7 @@ async def api_public_status(uid: str):
         "active_connections": st["active_connections"],
         "max_requests": ib.get("max_requests"),
         "request_count": ib.get("request_count"),
-    }
+    }, headers=headers)
 
 
 # ------------------------------------------------------------------ system / stats
@@ -846,6 +892,21 @@ async def stats(request: Request, user: str = Depends(require_auth)):
 
     total_active = sum(len(v) for v in runtime["active"].values())
 
+    # Build a continuous 24-hour timeline from (now - 23h) to current hour
+    raw_hourly = {item["t"]: item for item in db["stats"].get("hourly", []) if "t" in item}
+    now_bucket = int(time.time() // 3600) * 3600
+    hourly_series = []
+    for i in range(23, -1, -1):
+        bucket_t = now_bucket - (i * 3600)
+        if bucket_t in raw_hourly:
+            hourly_series.append({
+                "t": bucket_t,
+                "up": raw_hourly[bucket_t].get("up", 0),
+                "down": raw_hourly[bucket_t].get("down", 0)
+            })
+        else:
+            hourly_series.append({"t": bucket_t, "up": 0, "down": 0})
+
     return {
         "cpu_percent": cpu,
         "mem_percent": mem.percent,
@@ -854,7 +915,7 @@ async def stats(request: Request, user: str = Depends(require_auth)):
         "uptime_seconds": uptime,
         "total_up": db["stats"].get("total_up", 0),
         "total_down": db["stats"].get("total_down", 0),
-        "hourly": db["stats"].get("hourly", []),
+        "hourly": hourly_series,
         "inbounds_count": len(db["inbounds"]),
         "active_connections": total_active,
         "location": describe_colo(colo),
@@ -867,36 +928,40 @@ def _ver_tuple(v):
 
 
 async def _resolve_latest_release(repo: str, current: str, client: httpx.AsyncClient):
-    """Returns (latest_version, html_url, download_zip_url) using GitHub's releases API."""
+    """Returns (latest_version, html_url, download_zip_url) using GitHub's releases/tags API."""
     latest, url, zip_url = current, f"https://github.com/{repo}/releases", None
-    r = await client.get(f"https://api.github.com/repos/{repo}/releases/latest")
-    if r.status_code == 200:
-        data = r.json()
-        tag = (data.get("tag_name") or "").lstrip("v")
-        if tag:
-            latest = tag
-            url = data.get("html_url", url)
-            zip_url = data.get("zipball_url")
-    else:
-        r2 = await client.get(f"https://api.github.com/repos/{repo}/tags")
-        if r2.status_code == 200 and r2.json():
-            tag_info = r2.json()[0]
-            latest = (tag_info.get("name") or current).lstrip("v")
-            url = f"https://github.com/{repo}/releases/tag/{tag_info.get('name')}"
-            zip_url = tag_info.get("zipball_url")
+    try:
+        r = await client.get(f"https://api.github.com/repos/{repo}/releases/latest", headers=OTA_HEADERS)
+        if r.status_code == 200:
+            data = r.json()
+            tag = (data.get("tag_name") or "").lstrip("v")
+            if tag:
+                latest = tag
+                url = data.get("html_url", url)
+                zip_url = data.get("zipball_url") or f"https://api.github.com/repos/{repo}/zipball/{data.get('tag_name')}"
+        else:
+            r2 = await client.get(f"https://api.github.com/repos/{repo}/tags", headers=OTA_HEADERS)
+            if r2.status_code == 200 and r2.json():
+                tags = r2.json()
+                if tags:
+                    tag_info = tags[0]
+                    tag_name = tag_info.get("name") or current
+                    latest = tag_name.lstrip("v")
+                    url = f"https://github.com/{repo}/releases/tag/{tag_name}"
+                    zip_url = tag_info.get("zipball_url") or f"https://api.github.com/repos/{repo}/zipball/{tag_name}"
+    except Exception:
+        pass
     return latest, url, zip_url
 
 
 @app.get("/api/ota/check")
 async def api_ota_check(user: str = Depends(require_auth)):
-    db = await store.get()
-    repo = (db.get("settings") or {}).get("ota_repo") or "your-username/StanNG"
     current = APP_VERSION
     latest = current
-    url = f"https://github.com/{repo}/releases"
+    url = f"https://github.com/{OTA_REPO}/releases"
     try:
-        async with httpx.AsyncClient(timeout=6, headers={"Accept": "application/vnd.github+json"}) as client:
-            latest, url, _zip = await _resolve_latest_release(repo, current, client)
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            latest, url, _zip = await _resolve_latest_release(OTA_REPO, current, client)
     except Exception:
         pass
 
@@ -957,29 +1022,24 @@ async def api_ota_update(request: Request, user: str = Depends(require_auth)):
         raise HTTPException(409, "update-already-in-progress")
 
     async with UPDATE_LOCK:
-        db = await store.get()
-        repo = (db.get("settings") or {}).get("ota_repo") or ""
-        if not repo or "/" not in repo:
-            raise HTTPException(400, "no-repo-configured")
-
         import tempfile
         import shutil as _shutil
 
         current = APP_VERSION
         try:
-            async with httpx.AsyncClient(timeout=15, headers={"Accept": "application/vnd.github+json"}, follow_redirects=True) as client:
-                latest, html_url, zip_url = await _resolve_latest_release(repo, current, client)
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                latest, html_url, zip_url = await _resolve_latest_release(OTA_REPO, current, client)
                 if _ver_tuple(latest) <= _ver_tuple(current):
                     return {"ok": False, "reason": "already-up-to-date", "current": current, "latest": latest}
                 if not zip_url:
-                    raise HTTPException(502, "no-downloadable-archive-found")
+                    zip_url = f"https://api.github.com/repos/{OTA_REPO}/zipball/{latest}"
 
                 tmp_root = tempfile.mkdtemp(prefix="stanng_ota_")
                 zip_path = os.path.join(tmp_root, "release.zip")
                 staged_dir = os.path.join(tmp_root, "staged")
                 os.makedirs(staged_dir, exist_ok=True)
 
-                async with client.stream("GET", zip_url) as resp:
+                async with client.stream("GET", zip_url, headers=OTA_HEADERS) as resp:
                     if resp.status_code != 200:
                         raise HTTPException(502, f"download-failed-{resp.status_code}")
                     with open(zip_path, "wb") as f:
