@@ -32,7 +32,7 @@ DEFAULT_DB: Dict[str, Any] = {
         # version after every update.
         # ---- advanced config defaults (applied to newly generated VLESS links) ----
         "default_fingerprint": "chrome",     # chrome | ios | firefox | edge | random
-        "default_alpn": "h2,http/1.1",          # http/1.1 | h2,http/1.1 | h3,h2,http/1.1
+        "default_alpn": "http/1.1",          # http/1.1 | h2,http/1.1 | h3,h2,http/1.1
         "sni_override": "",                  # optional domain-fronting SNI; blank = use host
         "fragment_enabled": True,
         "fragment_packets": "tlshello",
