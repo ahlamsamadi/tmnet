@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 StanNG — a single-service VLESS-over-WebSocket panel, wizarding-academy themed.
-Version 1.5.5 — fully fixed: OTA, stats, active connections, traffic page, hourly chart.
+Version 1.5.5 — fully fixed: OTA, stats, traffic page, hourly chart, active connections (last_seen method).
 """
 import asyncio
 import base64
@@ -52,7 +52,7 @@ runtime = {
     "pending_traffic": {},
     "lock": asyncio.Lock(),
 }
-
+last_seen = {}  # ✅ اضافه شده: uid -> timestamp of last traffic
 
 DOH_PRIMARY = "https://1.1.1.1/dns-query"
 DOH_SECONDARY = "https://8.8.8.8/dns-query"
@@ -65,7 +65,6 @@ async def lifespan(app: FastAPI):
     keepalive_task = asyncio.create_task(_keep_alive_loop())
     housekeep_task = asyncio.create_task(_housekeeping_loop())
     
-    # Initialize Xray config and start it
     db = await store.get()
     xray_manager.generate_xray_config(db.get("inbounds", []))
     xray_manager.restart_xray()
@@ -149,7 +148,6 @@ def public_host(request: Request, db) -> str:
 
 
 def get_scheme(request: Request = None) -> str:
-    """Always return https scheme for subscription and public endpoints."""
     return "https"
 
 
@@ -186,6 +184,7 @@ def inbound_status(ib) -> dict:
 
 # ------------------------------------------------------------------ background tasks
 async def _periodic_flush():
+    global last_seen
     while True:
         try:
             await asyncio.sleep(5)
@@ -201,10 +200,11 @@ async def _periodic_flush():
                             ib["used_down"] = ib.get("used_down", 0) + delta.get("down", 0)
                             total_up += delta.get("up", 0)
                             total_down += delta.get("down", 0)
+                        # ✅ به‌روزرسانی زمان آخرین فعالیت کاربر
+                        last_seen[uid] = time.time()
                     db["stats"]["total_up"] = db["stats"].get("total_up", 0) + total_up
                     db["stats"]["total_down"] = db["stats"].get("total_down", 0) + total_down
 
-                # Always update hourly bucket (even with zero values)
                 hourly = db["stats"].setdefault("hourly", [])
                 bucket = int(time.time() // 3600) * 3600
                 if hourly and hourly[-1]["t"] == bucket:
@@ -264,10 +264,6 @@ async def health_check():
 
 @app.api_route("/dns-query", methods=["GET", "POST", "OPTIONS"])
 async def doh_endpoint(request: Request):
-    """
-    RFC 8484 compliant DNS-over-HTTPS (DoH) proxy.
-    Handles GET wireformat/JSON queries and POST binary dns-message.
-    """
     if request.method == "OPTIONS":
         return Response(
             status_code=204,
@@ -611,7 +607,6 @@ async def api_delete_inbound(uid: str, user: str = Depends(require_auth)):
     if not found["v"]:
         raise HTTPException(404, "not-found")
         
-    # Re-fetch db to get the updated inbounds
     db = await store.get()
     xray_manager.generate_xray_config(db["inbounds"])
     xray_manager.restart_xray()
@@ -649,11 +644,6 @@ async def api_regenerate_uuid(uid: str, user: str = Depends(require_auth)):
 
 
 def build_links(request: Request, db, ib) -> dict:
-    """
-    Build VLESS and VMess TLS links for WS and XHTTP.
-    All non-TLS and Trojan configs are excluded.
-    XHTTP strictly uses alpn=h2.
-    """
     host = public_host(request, db)
     uuidv = ib["uuid"]
     name = ib["name"]
@@ -662,10 +652,8 @@ def build_links(request: Request, db, ib) -> dict:
     sni = (db.get("settings") or {}).get("sni_override") or host
     port_tls = 443
 
-    # 1. VLESS WS (TLS)
     vl_ws_tls = f"vless://{uuidv}@{host}:{port_tls}?encryption=none&security=tls&type=ws&host={quote(host)}&path={quote('/vl-ws', safe='/')}&sni={quote(sni)}&fp={fp}&alpn={quote(alpn, safe=',/')}#{quote(f'StanNG-{name}-VL-WS-TLS')}"
 
-    # 2. VMess WS (TLS)
     def make_vmess(port, tls_mode, remark):
         vm_json = {
             "v": "2", "ps": remark, "add": host, "port": port, "id": uuidv,
@@ -676,11 +664,8 @@ def build_links(request: Request, db, ib) -> dict:
         return f"vmess://{b64}"
     
     vm_ws_tls = make_vmess(port_tls, "tls", f"StanNG-{name}-VM-WS-TLS")
-
-    # 3. VLESS XHTTP (TLS) - ALPN strictly set to h2
     vl_xh_tls = f"vless://{uuidv}@{host}:{port_tls}?encryption=none&security=tls&type=xhttp&host={quote(host)}&path={quote('/vl-xhttp', safe='/')}&sni={quote(sni)}&fp={fp}&alpn=h2#{quote(f'StanNG-{name}-VL-XHTTP-TLS')}"
 
-    # ---------- داینامیک کانفیگ‌های نمایشی (مصرف و انقضا) ----------
     st = inbound_status(ib)
     quota_gb = ib.get("quota_gb") or 0
     used_gb = st["used"] / (1024 ** 3)
@@ -698,14 +683,10 @@ def build_links(request: Request, db, ib) -> dict:
         {"remark": free_remark, "link": dummy_link_credit, "kind": "credit"},
     ]
 
-    all_links = [
-        vl_ws_tls,
-        vm_ws_tls,
-        vl_xh_tls
-    ]
+    all_links = [vl_ws_tls, vm_ws_tls, vl_xh_tls]
 
     return {
-        "tls": vl_ws_tls,  # Keep primary for QR code
+        "tls": vl_ws_tls,
         "all_links": all_links,
         "info_configs": info_configs,
     }
@@ -718,7 +699,7 @@ async def api_inbound_links(uid: str, request: Request, user: str = Depends(requ
     if not ib:
         raise HTTPException(404, "not-found")
     host = public_host(request, db)
-    scheme = get_scheme(request)  # Always use https in production
+    scheme = get_scheme(request)
     links = build_links(request, db, ib)
     return {
         "links": links,
@@ -744,13 +725,8 @@ async def api_inbound_qr(uid: str, request: Request, user: str = Depends(require
 
 
 # ------------------------------------------------------------------ subscriptions
-
 @app.get("/sub/{uid}")
 async def sub_plain(uid: str, request: Request):
-    """
-    Returns base64-encoded subscription links with dynamic info configs and standard headers.
-    Includes fresh Subscription-Userinfo and cache prevention headers.
-    """
     db = await store.get()
     ib = inbound_by_uid(db, uid)
     if not ib:
@@ -758,14 +734,11 @@ async def sub_plain(uid: str, request: Request):
     st = inbound_status(ib)
     links = build_links(request, db, ib)
     
-    # Combine links: Info Configs (display-only) + all protocol links
     combined = (
         [c["link"] for c in links["info_configs"]]
         + links["all_links"]
     )
     raw = "\n".join(combined)
-    
-    # Base64 encode for wider client compatibility
     b64 = base64.b64encode(raw.encode()).decode()
     
     used_up = int(ib.get("used_up") or 0)
@@ -872,6 +845,7 @@ async def health():
 
 @app.get("/stats")
 async def stats(request: Request, user: str = Depends(require_auth)):
+    global last_seen
     db = await store.get()
     cpu = psutil.cpu_percent(interval=0.2)
     mem = psutil.virtual_memory()
@@ -888,38 +862,15 @@ async def stats(request: Request, user: str = Depends(require_auth)):
     except Exception:
         pass
 
-    # ========== شمارش دقیق اتصالات فعال (IPهای منحصربه‌فرد خارجی) ==========
+    # ========== روش جدید: شمارش کاربرانی که در ۳۰ ثانیه اخیر ترافیک داشتند ==========
     def get_active_connections():
-        try:
-            import subprocess
-            import re
-            result = subprocess.run(
-                ["netstat", "-tn"], capture_output=True, text=True, timeout=2
-            )
-            lines = result.stdout.splitlines()
-            target_ports = [10001, 10002, 10004]
-            foreign_ips = set()
-            
-            for line in lines:
-                if "ESTABLISHED" not in line:
-                    continue
-                for port in target_ports:
-                    if f":{port}" in line:
-                        parts = line.split()
-                        if len(parts) >= 5:
-                            foreign_addr = parts[4]
-                            foreign_ip = foreign_addr.split(":")[0]
-                            if foreign_ip != "127.0.0.1" and not foreign_ip.startswith("127."):
-                                foreign_ips.add(foreign_ip)
-                        break
-            return len(foreign_ips)
-        except Exception:
-            return 0
+        now = time.time()
+        active = sum(1 for ts in last_seen.values() if now - ts < 30)
+        return active
 
     total_active = get_active_connections()
     # ==============================================================
 
-    # Build a continuous 24-hour timeline from (now - 23h) to current hour
     raw_hourly = {item["t"]: item for item in db["stats"].get("hourly", []) if "t" in item}
     now_bucket = int(time.time() // 3600) * 3600
     hourly_series = []
@@ -955,7 +906,6 @@ def _ver_tuple(v):
 
 
 async def _resolve_latest_release(repo: str, current: str, client: httpx.AsyncClient):
-    """Returns (latest_version, html_url, download_zip_url) using GitHub's releases/tags API."""
     latest, url, zip_url = current, f"https://github.com/{repo}/releases", None
     try:
         r = await client.get(f"https://api.github.com/repos/{repo}/releases/latest", headers=OTA_HEADERS)
@@ -1106,7 +1056,6 @@ async def api_ota_update(request: Request, user: str = Depends(require_auth)):
             "files_updated": touched,
             "restarting": True,
         }
-
 
 
 if __name__ == "__main__":
