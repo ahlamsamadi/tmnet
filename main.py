@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 StanNG — a single-service VLESS-over-WebSocket panel, wizarding-academy themed.
-Version 1.5.3 — plain-text subscription with Info Configs + TLS, compatible with v2rayNG.
-Fixed: subscription links are always generated with https:// scheme.
+Version 1.5.5 — fixed dashboard stats, OTA validation, dynamic info configs.
 """
 import asyncio
 import base64
@@ -191,7 +190,6 @@ async def _periodic_flush():
         try:
             await asyncio.sleep(5)
             snapshot = await xray_manager.get_xray_stats()
-            # حتی اگر snapshot خالی باشد، باکت ساعتی را به‌روز می‌کنیم
 
             def _apply(db, snap=snapshot):
                 total_up = total_down = 0
@@ -206,7 +204,7 @@ async def _periodic_flush():
                     db["stats"]["total_up"] = db["stats"].get("total_up", 0) + total_up
                     db["stats"]["total_down"] = db["stats"].get("total_down", 0) + total_down
 
-                # همیشه باکت ساعتی را به‌روز کن (حتی با مقدار صفر)
+                # Always update hourly bucket (even with zero values)
                 hourly = db["stats"].setdefault("hourly", [])
                 bucket = int(time.time() // 3600) * 3600
                 if hourly and hourly[-1]["t"] == bucket:
@@ -682,7 +680,7 @@ def build_links(request: Request, db, ib) -> dict:
     # 3. VLESS XHTTP (TLS) - ALPN strictly set to h2
     vl_xh_tls = f"vless://{uuidv}@{host}:{port_tls}?encryption=none&security=tls&type=xhttp&host={quote(host)}&path={quote('/vl-xhttp', safe='/')}&sni={quote(sni)}&fp={fp}&alpn=h2#{quote(f'StanNG-{name}-VL-XHTTP-TLS')}"
 
-    # Info configs (display-only) with distinct dummy endpoints to prevent client database collisions
+    # ---------- داینامیک کانفیگ‌های نمایشی (مصرف و انقضا) ----------
     st = inbound_status(ib)
     quota_gb = ib.get("quota_gb") or 0
     used_gb = st["used"] / (1024 ** 3)
@@ -1057,7 +1055,6 @@ async def api_ota_update(request: Request, user: str = Depends(require_auth)):
                 _shutil.rmtree(staged_data, ignore_errors=True)
 
             touched = _apply_staged_update(staged_dir, BASE_DIR)
-            # 🛠️ تغییر باگ ۱: اگر هیچ فایلی کپی نشد، خطا بده
             if not touched:
                 _shutil.rmtree(tmp_root, ignore_errors=True)
                 raise HTTPException(502, "update-failed-no-files-copied")
