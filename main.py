@@ -33,7 +33,7 @@ import xray_manager
 from colo_map import describe_colo
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.5.0"
 PANEL_NAME = "StanNG"
 TELEGRAM_CONTACT = "https://t.me/rvivl"
 SESSION_COOKIE = "stanng_session"
