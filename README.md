@@ -176,4 +176,4 @@ python main.py
 
 ---
 
-**StanNG** — ساده، سبک، و جادویی 🧙‍♂️
+<div align="center">**StanNG** — ساده، سبک، و جادویی 🧙‍♂️</div>
