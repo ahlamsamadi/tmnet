@@ -72,23 +72,23 @@
   function computeLayout(canvas, data) {
     const rect = canvas.getBoundingClientRect();
     const width = Math.max(rect.width, 280);
-    // IMPORTANT: the canvas's logical (CSS) height must be read from a
-    // stable source that we control, NOT from canvas.getAttribute('height')
-    // or canvas.height — both of those get overwritten below with the
-    // DPI-scaled pixel size. Reading them back on a later re-render (mobile
-    // browsers fire many resize events while scrolling, as the address bar
-    // hides/shows) would re-multiply an already-scaled value by the DPR
-    // again and again, making the chart grow exponentially on every tick.
-    // We cache the original logical height once in a data-* attribute.
+    // Cache original logical height once
     if (!canvas.dataset.logicalHeight) {
       canvas.dataset.logicalHeight = canvas.getAttribute('height') || '220';
     }
     const height = parseInt(canvas.dataset.logicalHeight, 10) || 220;
-    const maxTotal = Math.max(1, ...data.map(d => (d.up || 0) + (d.down || 0)));
-    const step = niceStep(maxTotal);
-    const niceMax = Math.max(step, Math.ceil(maxTotal / step) * step);
+    const maxTotal = Math.max(0, ...(data || []).map(d => (d.up || 0) + (d.down || 0)));
+    let niceMax;
+    let step;
+    if (maxTotal <= 0) {
+      niceMax = 100 * 1024 * 1024; // 100 MB default headroom when no traffic recorded
+      step = niceMax / 4;
+    } else {
+      step = niceStep(maxTotal);
+      niceMax = Math.max(step, Math.ceil(maxTotal / step) * step);
+    }
     const yLabelW = fmtBytesShort(niceMax).length * 6.5 + 14;
-    const padding = { top: 16, right: 14, bottom: 28, left: Math.max(46, yLabelW) };
+    const padding = { top: 16, right: 14, bottom: 28, left: Math.max(48, yLabelW) };
     return { width, height, padding, niceMax, step };
   }
 
@@ -116,17 +116,13 @@
     const chartH = height - padding.top - padding.bottom;
     const bars = [];
 
-    if (!data.length) {
-      ctx.fillStyle = textMuted;
-      ctx.font = '13px Vazirmatn, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('—', width / 2, height / 2);
+    if (!data || !data.length) {
       return { bars: [], padding, chartW, chartH, width, height };
     }
 
     const n = data.length;
     const groupW = chartW / n;
-    const barW = Math.min(18, groupW * 0.34);
+    const barW = Math.max(3, Math.min(14, groupW * 0.34));
 
     // ---- horizontal gridlines + Y-axis byte labels ----
     const rows = 4;
@@ -142,7 +138,7 @@
       ctx.lineTo(width - padding.right, y + 0.5);
       ctx.stroke();
       const val = niceMax * (1 - i / rows);
-      ctx.fillText(fmtBytesShort(val), padding.left - 10, y + 3.5);
+      ctx.fillText(fmtBytesShort(val), padding.left - 8, y + 3.5);
     }
 
     // ---- day-boundary vertical markers (midnight ticks) ----
@@ -169,26 +165,32 @@
       const upH = ((d.up || 0) / niceMax) * chartH;
       const downH = ((d.down || 0) / niceMax) * chartH;
 
-      const gradUp = ctx.createLinearGradient(0, padding.top + chartH - upH, 0, padding.top + chartH);
-      gradUp.addColorStop(0, goldLight);
-      gradUp.addColorStop(1, 'rgba(201,162,39,0.18)');
-      ctx.fillStyle = gradUp;
-      roundRect(ctx, cx - barW - 1.5, padding.top + chartH - upH, barW, upH, 2.5);
-      ctx.fill();
+      if (upH > 0.5) {
+        const gradUp = ctx.createLinearGradient(0, padding.top + chartH - upH, 0, padding.top + chartH);
+        gradUp.addColorStop(0, goldLight);
+        gradUp.addColorStop(1, 'rgba(201,162,39,0.18)');
+        ctx.fillStyle = gradUp;
+        roundRect(ctx, cx - barW - 1, padding.top + chartH - upH, barW, upH, 2.5);
+        ctx.fill();
+      }
 
-      const gradDown = ctx.createLinearGradient(0, padding.top + chartH - downH, 0, padding.top + chartH);
-      gradDown.addColorStop(0, azureColor);
-      gradDown.addColorStop(1, 'rgba(77,159,236,0.18)');
-      ctx.fillStyle = gradDown;
-      roundRect(ctx, cx + 1.5, padding.top + chartH - downH, barW, downH, 2.5);
-      ctx.fill();
+      if (downH > 0.5) {
+        const gradDown = ctx.createLinearGradient(0, padding.top + chartH - downH, 0, padding.top + chartH);
+        gradDown.addColorStop(0, azureColor);
+        gradDown.addColorStop(1, 'rgba(77,159,236,0.18)');
+        ctx.fillStyle = gradDown;
+        roundRect(ctx, cx + 1, padding.top + chartH - downH, barW, downH, 2.5);
+        ctx.fill();
+      }
 
       bars.push({
         cx, x0: cx - groupW / 2, x1: cx + groupW / 2,
         up: d.up || 0, down: d.down || 0, t: d.t || 0,
       });
 
-      if (i % Math.ceil(n / 8 || 1) === 0 || i === n - 1) {
+      // Label every 3-4 hours and last hour
+      const labelInterval = Math.max(1, Math.floor(n / 7));
+      if (i % labelInterval === 0 || i === n - 1) {
         const dt = new Date((d.t || 0) * 1000);
         const label = dt.getHours().toString().padStart(2, '0') + ':00';
         ctx.fillStyle = textColor;
@@ -223,13 +225,15 @@
 
     // dots on the line
     data.forEach((d, i) => {
-      const cx = padding.left + groupW * i + groupW / 2;
       const total = (d.up || 0) + (d.down || 0);
-      const y = padding.top + chartH - (total / niceMax) * chartH;
-      ctx.beginPath();
-      ctx.arc(cx, y, 2.2, 0, Math.PI * 2);
-      ctx.fillStyle = emeraldColor;
-      ctx.fill();
+      if (total > 0 || i === 0 || i === n - 1 || i % Math.max(1, Math.floor(n / 6)) === 0) {
+        const cx = padding.left + groupW * i + groupW / 2;
+        const y = padding.top + chartH - (total / niceMax) * chartH;
+        ctx.beginPath();
+        ctx.arc(cx, y, 2.2, 0, Math.PI * 2);
+        ctx.fillStyle = emeraldColor;
+        ctx.fill();
+      }
     });
 
     return { bars, padding, chartW, chartH, width, height };
@@ -302,7 +306,14 @@
     }
     ensureLegend(wrap);
 
-    const data = (hourlyData || []).slice(-48);
+    let data = (hourlyData || []).slice(-48);
+    if (!data.length) {
+      const nowBucket = Math.floor(Date.now() / 1000 / 3600) * 3600;
+      data = [];
+      for (let i = 23; i >= 0; i--) {
+        data.push({ t: nowBucket - (i * 3600), up: 0, down: 0 });
+      }
+    }
     const layout = drawChart(canvas, data);
     state.set(canvas, layout);
 
