@@ -1,4 +1,4 @@
-```markdown
+
 <div align="center">
 
 <img src="static/img/logo-square.png" width="110" alt="StanNG logo">
