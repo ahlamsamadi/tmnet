@@ -5,22 +5,17 @@
    =========================================================== */
 
 :root {
-  /* --- base surfaces --- */
-  --bg-0: #0b0817;
-  --bg-1: #120c24;
-  --bg-2: #1a1330;
-  --bg-3: #241a42;
-  --surface: rgba(255, 255, 255, 0.045);
-  --surface-strong: rgba(255, 255, 255, 0.08);
-  --border-soft: rgba(201, 162, 39, 0.22);
-  --border-strong: rgba(201, 162, 39, 0.45);
-
-  /* --- brand gold --- */
-  --gold-100: #f6e6b4;
-  --gold-300: #e6c765;
-  --gold-500: #c9a227;
-  --gold-700: #9c7a17;
-  --gold-glow: rgba(201, 162, 39, 0.35);
+  body {
+  margin: 0;
+  background:
+    radial-gradient(1200px 800px at 15% -10%, rgba(66, 133, 244, 0.06), transparent 60%),
+    radial-gradient(1000px 700px at 110% 10%, rgba(138, 180, 248, 0.05), transparent 55%),
+    var(--bg-0);
+  color: var(--text-0);
+  font-family: var(--font-fa);
+  overflow-x: hidden;
+  transition: background var(--dur-mid) var(--ease-out), color var(--dur-mid) var(--ease-out);
+}
 
   /* --- accent hues (harmonized "house" palette) --- */
   --amethyst: #8b5cf6;
