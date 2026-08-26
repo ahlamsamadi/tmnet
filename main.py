@@ -33,7 +33,7 @@ from colo_map import describe_colo
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 APP_VERSION = "1.5.5"
-PANEL_NAME = "StanNG"
+PANEL_NAME = "TMnetwork"
 TELEGRAM_CONTACT = "https://t.me/TM_Supportonline"
 OTA_REPO = "youdidking/stanngv2"
 OTA_HEADERS = {
